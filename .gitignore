@@ -1,0 +1,33 @@
+# Secrets
+config.py
+.env
+*.token
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environment
+.venv/
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+
+# Data files (не храним в Git, но нужны для работы)
+*.json
+!dictionary.xlsx
+
+# Logs
+*.log
+bot.log
+admin.log
+
+# Render specific
+.render/
