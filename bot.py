@@ -7,6 +7,7 @@ import logging
 import asyncio
 import os
 import sys
+import json
 from dotenv import load_dotenv
 from maxapi import Bot, Dispatcher
 from maxapi import types
@@ -109,6 +110,33 @@ HELP_TEXT = """
 """
 
 
+# ==================== ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ ОТПРАВКИ ====================
+
+async def send_message_with_keyboard(chat_id: int, text: str, keyboard: dict = None):
+    """Отправка сообщения с клавиатурой"""
+    try:
+        # Базовый запрос
+        data = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML"
+        }
+
+        # Добавляем клавиатуру, если есть
+        if keyboard:
+            data["reply_markup"] = json.dumps(keyboard)
+
+        # Отправляем через прямой API запрос
+        url = f"https://botapi.max.ru/bot{BOT_TOKEN}/sendMessage"
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=data) as response:
+                if response.status != 200:
+                    logger.error(f"Ошибка отправки: {response.status}")
+    except Exception as e:
+        logger.error(f"Ошибка отправки сообщения: {e}")
+
+
 # ==================== ОБРАБОТЧИК СООБЩЕНИЙ ====================
 
 @dp.message_created()
@@ -144,9 +172,9 @@ async def handle_message(event):
 
         # Если словарь не загружен - сообщаем об ошибке
         if not dictionary:
-            await bot.send_message(
-                chat_id=chat_id,
-                text="❌ Ошибка: словарь не загружен. Обратитесь к администратору."
+            await send_message_with_keyboard(
+                chat_id,
+                "❌ Ошибка: словарь не загружен. Обратитесь к администратору."
             )
             return
 
@@ -156,58 +184,44 @@ async def handle_message(event):
         # ===== ОБРАБОТКА КОМАНДЫ START =====
         if text == '/start':
             welcome = f"👋 Добро пожаловать, {first_name}!\n\nЯ геологический словарь. Выберите действие:"
-
-            # Отправляем сообщение с клавиатурой
-            await bot.send_message(
-                chat_id=chat_id,
-                text=welcome,
-                keyboard=get_main_keyboard()  # Используем keyboard вместо reply_markup
-            )
+            await send_message_with_keyboard(chat_id, welcome, get_main_keyboard())
             return
 
         # ===== ОБРАБОТКА КНОПОК =====
         if text == "🔍 Найти термин":
             set_state(user_id, UserState.AWAITING_TERM)
-            await bot.send_message(
-                chat_id=chat_id,
-                text="🔍 Введите геологический термин:",
-                keyboard=get_main_keyboard()
+            await send_message_with_keyboard(
+                chat_id,
+                "🔍 Введите геологический термин:",
+                get_main_keyboard()
             )
             return
 
         elif text == "💬 Обратная связь":
             set_state(user_id, UserState.AWAITING_FEEDBACK)
-            await bot.send_message(
-                chat_id=chat_id,
-                text="📝 Напишите ваше сообщение. Я передам его разработчикам:",
-                keyboard=get_main_keyboard()
+            await send_message_with_keyboard(
+                chat_id,
+                "📝 Напишите ваше сообщение. Я передам его разработчикам:",
+                get_main_keyboard()
             )
             return
 
         elif text == "📚 О словаре":
-            await bot.send_message(
-                chat_id=chat_id,
-                text=SOURCE_INFO,
-                keyboard=get_main_keyboard()
-            )
+            await send_message_with_keyboard(chat_id, SOURCE_INFO, get_main_keyboard())
             return
 
         elif text == "❓ Помощь":
             help_text = HELP_TEXT.format(count=len(dictionary.terms))
-            await bot.send_message(
-                chat_id=chat_id,
-                text=help_text,
-                keyboard=get_main_keyboard()
-            )
+            await send_message_with_keyboard(chat_id, help_text, get_main_keyboard())
             return
 
         # ===== ОБРАБОТКА КОМАНД АДМИНА =====
         if text.startswith('/stats'):
             if user_id != ADMIN_ID:
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text="⛔ Команда доступна только администратору.",
-                    keyboard=get_main_keyboard()
+                await send_message_with_keyboard(
+                    chat_id,
+                    "⛔ Команда доступна только администратору.",
+                    get_main_keyboard()
                 )
                 return
 
@@ -221,24 +235,24 @@ async def handle_message(event):
 📚 **Словарь:** {len(dictionary.terms)} терминов
 📬 **Обратная связь:** {stats['total']} всего, {stats['unread']} новых
             """
-            await bot.send_message(chat_id=chat_id, text=response, keyboard=get_main_keyboard())
+            await send_message_with_keyboard(chat_id, response, get_main_keyboard())
             return
 
         if text.startswith('/broadcast'):
             if user_id != ADMIN_ID:
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text="⛔ Команда доступна только администратору.",
-                    keyboard=get_main_keyboard()
+                await send_message_with_keyboard(
+                    chat_id,
+                    "⛔ Команда доступна только администратору.",
+                    get_main_keyboard()
                 )
                 return
 
             parts = text.split(maxsplit=1)
             if len(parts) < 2:
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text="❌ Используйте: /broadcast [текст рассылки]",
-                    keyboard=get_main_keyboard()
+                await send_message_with_keyboard(
+                    chat_id,
+                    "❌ Используйте: /broadcast [текст рассылки]",
+                    get_main_keyboard()
                 )
                 return
 
@@ -246,10 +260,10 @@ async def handle_message(event):
             users = get_all_users()
 
             if not users:
-                await bot.send_message(chat_id=chat_id, text="⚠️ Нет пользователей для рассылки.")
+                await send_message_with_keyboard(chat_id, "⚠️ Нет пользователей для рассылки.")
                 return
 
-            await bot.send_message(chat_id=chat_id, text=f"📤 Начинаю рассылку на {len(users)} пользователей...")
+            await send_message_with_keyboard(chat_id, f"📤 Начинаю рассылку на {len(users)} пользователей...")
 
             success = 0
             failed = 0
@@ -260,9 +274,9 @@ async def handle_message(event):
                     if not user_chat_id:
                         continue
 
-                    await bot.send_message(
-                        chat_id=user_chat_id,
-                        text=f"📢 *Сообщение от администратора:*\n\n{broadcast_text}"
+                    await send_message_with_keyboard(
+                        user_chat_id,
+                        f"📢 *Сообщение от администратора:*\n\n{broadcast_text}"
                     )
                     success += 1
                     await asyncio.sleep(0.1)
@@ -271,10 +285,10 @@ async def handle_message(event):
                     logger.error(f"Ошибка рассылки: {e}")
                     failed += 1
 
-            await bot.send_message(
-                chat_id=chat_id,
-                text=f"✅ *Рассылка завершена!*\n\n• Успешно: {success}\n• Ошибок: {failed}",
-                keyboard=get_main_keyboard()
+            await send_message_with_keyboard(
+                chat_id,
+                f"✅ *Рассылка завершена!*\n\n• Успешно: {success}\n• Ошибок: {failed}",
+                get_main_keyboard()
             )
             return
 
@@ -293,7 +307,7 @@ async def handle_message(event):
 ---
 {SOURCE_INFO}
                 """
-                await bot.send_message(chat_id=chat_id, text=response, keyboard=get_main_keyboard())
+                await send_message_with_keyboard(chat_id, response, get_main_keyboard())
 
             elif result['suggestions']:
                 suggestions = "\n".join([f"• {term}" for term in result['suggestions']])
@@ -303,13 +317,13 @@ async def handle_message(event):
 Возможно, вы имели в виду:
 {suggestions}
                 """
-                await bot.send_message(chat_id=chat_id, text=response, keyboard=get_main_keyboard())
+                await send_message_with_keyboard(chat_id, response, get_main_keyboard())
 
             else:
                 response = f"""
 ❌ Термин *"{text}"* не найден в словаре.
                 """
-                await bot.send_message(chat_id=chat_id, text=response, keyboard=get_main_keyboard())
+                await send_message_with_keyboard(chat_id, response, get_main_keyboard())
 
             clear_state(user_id)
 
@@ -319,19 +333,19 @@ async def handle_message(event):
             user_name = user['name'] if user else first_name
             feedback_id = add_feedback(user_id, user_name, text)
 
-            await bot.send_message(
-                chat_id=chat_id,
-                text=f"✅ Спасибо! Сообщение #{feedback_id} отправлено разработчикам.",
-                keyboard=get_main_keyboard()
+            await send_message_with_keyboard(
+                chat_id,
+                f"✅ Спасибо! Сообщение #{feedback_id} отправлено разработчикам.",
+                get_main_keyboard()
             )
             clear_state(user_id)
 
         # Если нет состояния и это не кнопка и не команда
         else:
-            await bot.send_message(
-                chat_id=chat_id,
-                text="Используйте кнопки для навигации 👇",
-                keyboard=get_main_keyboard()
+            await send_message_with_keyboard(
+                chat_id,
+                "Используйте кнопки для навигации 👇",
+                get_main_keyboard()
             )
 
     except Exception as e:
