@@ -1,0 +1,31 @@
+# Создайте файл .gitignore
+@"
+# Secrets
+config.py
+.env
+*.token
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environment
+.venv/
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+
+# Data files
+*.json
+!dictionary.xlsx
+
+# Logs
+*.log
+"@ | Out-File -FilePath .gitignore -Encoding UTF8
