@@ -39,13 +39,19 @@ class GeologicalDictionary:
                 }
                 self.all_terms.append(term)
 
-            logger.info(f"✅ Загружено {len(self.terms)} терминов")
+            logger.info(f"✅ Загружено {len(self.terms)} терминов из {self.excel_file}")
 
         except Exception as e:
             logger.error(f"❌ Ошибка загрузки словаря: {e}")
 
+    def find_term(self, query: str) -> Optional[Dict]:
+        """Прямой поиск термина"""
+        if not query:
+            return None
+        return self.terms.get(query.lower().strip())
+
     def find_similar(self, query: str, threshold: float = 0.7, max_results: int = 5) -> List[str]:
-        """Поиск похожих терминов"""
+        """Поиск похожих терминов (исправление опечаток)"""
         if len(query) < 3 or not self.all_terms:
             return []
 
@@ -65,7 +71,12 @@ class GeologicalDictionary:
         return [term for term, _ in suggestions[:max_results]]
 
     def search(self, query: str, threshold: float = 0.7, max_suggestions: int = 5) -> Dict:
-        """Полный поиск"""
+        """
+        Полноценный поиск:
+        - Если найден точно → возвращает определение
+        - Если есть похожие → возвращает список
+        - Если ничего нет → возвращает пустой результат
+        """
         result = {
             'found': False,
             'term': None,
@@ -76,14 +87,15 @@ class GeologicalDictionary:
         if not query:
             return result
 
-        query_lower = query.lower().strip()
-
-        if query_lower in self.terms:
+        # Прямой поиск
+        term_data = self.find_term(query)
+        if term_data:
             result['found'] = True
-            result['term'] = self.terms[query_lower]['term']
-            result['definition'] = self.terms[query_lower]['definition']
+            result['term'] = term_data['term']
+            result['definition'] = term_data['definition']
             return result
 
+        # Поиск похожих
         suggestions = self.find_similar(query, threshold, max_suggestions)
         if suggestions:
             result['suggestions'] = suggestions
