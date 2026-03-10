@@ -1,7 +1,6 @@
 """
 Геологический бот для MAX
-Полная версия с админ-панелью и пользовательскими кнопками
-Исправлен обработчик callback для корректной работы кнопок
+Версия с диагностикой callback для определения структуры объекта
 """
 
 import logging
@@ -530,273 +529,79 @@ async def handle_message(event):
         traceback.print_exc()
 
 
-# ==================== ОБРАБОТЧИК НАЖАТИЙ НА КНОПКИ ====================
+# ==================== ДИАГНОСТИЧЕСКИЙ ОБРАБОТЧИК НАЖАТИЙ НА КНОПКИ ====================
 
 @dp.message_callback()
 async def handle_callback(event):
-    """Обработчик нажатий на inline-кнопки"""
+    """Диагностический обработчик для определения структуры callback"""
     try:
-        # ВАЖНО: В вашей версии maxapi объект callback может быть в другом месте
-        # Пробуем разные варианты получения данных
+        # Выводим всё, что есть в event
+        print("\n" + "=" * 60)
+        print("🔍 ДИАГНОСТИКА CALLBACK")
+        print("=" * 60)
+        print(f"Тип event: {type(event)}")
+        print(f"Атрибуты event: {dir(event)}")
 
-        # Вариант 1: callback лежит в event.callback
+        # Проверяем наличие атрибутов
+        for attr in ['callback', 'message_callback', 'data', 'payload', 'user_id', 'chat_id']:
+            if hasattr(event, attr):
+                value = getattr(event, attr)
+                print(f"event.{attr}: {value}")
+
+        # Проверяем разные варианты получения callback
+        callback_data = None
         if hasattr(event, 'callback'):
             callback_data = event.callback
-        # Вариант 2: callback лежит в event.message_callback
+            print("\n✅ Найден event.callback")
+            print(f"Тип callback: {type(callback_data)}")
+            print(f"Атрибуты callback: {dir(callback_data)}")
+
+            # Пробуем получить данные
+            if hasattr(callback_data, 'from_user'):
+                print(f"callback.from_user: {callback_data.from_user}")
+                if hasattr(callback_data.from_user, 'user_id'):
+                    print(f"callback.from_user.user_id: {callback_data.from_user.user_id}")
+
+            if hasattr(callback_data, 'user_id'):
+                print(f"callback.user_id: {callback_data.user_id}")
+
+            if hasattr(callback_data, 'payload'):
+                print(f"callback.payload: {callback_data.payload}")
+
+            if hasattr(callback_data, 'data'):
+                print(f"callback.data: {callback_data.data}")
+
+            if hasattr(callback_data, 'message') and hasattr(callback_data.message, 'chat_id'):
+                print(f"callback.message.chat_id: {callback_data.message.chat_id}")
+
         elif hasattr(event, 'message_callback'):
             callback_data = event.message_callback
-        else:
-            logger.error("❌ Не удалось найти callback в event")
-            return
+            print("\n✅ Найден event.message_callback")
+            print(f"Тип message_callback: {type(callback_data)}")
+            print(f"Атрибуты message_callback: {dir(callback_data)}")
 
-        # Получаем user_id разными способами
-        user_id = None
-        if hasattr(callback_data, 'from_user') and hasattr(callback_data.from_user, 'user_id'):
-            user_id = callback_data.from_user.user_id
-        elif hasattr(callback_data, 'user_id'):
-            user_id = callback_data.user_id
-        elif hasattr(event, 'user_id'):
-            user_id = event.user_id
+        # Если есть __dict__, покажем его
+        if hasattr(event, '__dict__'):
+            print(f"\nevent.__dict__: {event.__dict__}")
 
-        # Получаем chat_id
-        chat_id = None
-        if hasattr(callback_data, 'message') and hasattr(callback_data.message, 'chat_id'):
-            chat_id = callback_data.message.chat_id
-        elif hasattr(event, 'chat_id'):
-            chat_id = event.chat_id
+        print("=" * 60 + "\n")
 
-        # Получаем payload
-        payload = None
-        if hasattr(callback_data, 'payload'):
-            payload = callback_data.payload
-        elif hasattr(callback_data, 'data'):
-            payload = callback_data.data
-
-        if not user_id or not chat_id or not payload:
-            logger.error(
-                f"❌ Не удалось получить данные callback: user_id={user_id}, chat_id={chat_id}, payload={payload}")
-            return
-
-        logger.info(f"🔘 Нажата кнопка: {payload} от {user_id}")
-
-        # ===== КНОПКИ ПОЛЬЗОВАТЕЛЯ =====
-
-        if payload == "user_search":
-            set_state(user_id, UserState.AWAITING_TERM)
-            exit_button = create_exit_button()
-            await bot.send_message(
-                chat_id=chat_id,
-                text=SEARCH_MODE_TEXT,
-                attachments=[exit_button]
-            )
-
-        elif payload == "user_feedback":
-            set_state(user_id, UserState.AWAITING_FEEDBACK)
-            exit_button = create_exit_button()
-            await bot.send_message(
-                chat_id=chat_id,
-                text=FEEDBACK_MODE_TEXT,
-                attachments=[exit_button]
-            )
-
-        elif payload == "user_info":
-            await bot.send_message(
-                chat_id=chat_id,
-                text=SOURCE_INFO
-            )
-
-        elif payload == "user_help":
-            main_menu = create_main_menu()
-            await bot.send_message(
-                chat_id=chat_id,
-                text=HELP_TEXT,
-                attachments=[main_menu]
-            )
-
-        # ===== КНОПКИ АДМИНА =====
-
-        elif payload == "admin_stats":
-            if user_id != ADMIN_ID:
-                return
-
-            users = get_all_users()
-            stats = get_feedback_stats()
-            response = f"""
-📊 *Статистика бота*
-
-👥 *Пользователи:* {len(users)}
-📚 *Термины:* {len(dictionary.terms) if dictionary else 0}
-📬 *Сообщения:* {stats['total']} всего, {stats['unread']} новых
-
-👑 *Администратор:* {ADMIN_ID}
-            """
-            back_button = create_back_button()
-            await bot.send_message(
-                chat_id=chat_id,
-                text=response,
-                attachments=[back_button]
-            )
-
-        elif payload == "admin_feed":
-            if user_id != ADMIN_ID:
-                return
-
-            feedback = load_feedback()
-            if not feedback:
-                await bot.send_message(chat_id=chat_id, text="📭 Нет сообщений.")
-                return
-
-            stats = get_feedback_stats()
-            feedback.sort(key=lambda x: x['created_at'], reverse=True)
-            recent = feedback[:5]
-
-            response = "📬 *Последние сообщения:*\n\n"
-            for msg in recent:
-                status = "🆕" if not msg['is_read'] else "✅"
-                response += f"{status} #{msg['id']} от {msg['user_name']}: "
-                response += f"{msg['message'][:50]}...\n"
-                response += f"📅 {msg['created_at']}\n\n"
-
-            response += f"Всего: {len(feedback)}, непрочитано: {stats['unread']}\n"
-            response += "Для просмотра: /view [id]"
-
-            back_button = create_back_button()
-            await bot.send_message(
-                chat_id=chat_id,
-                text=response,
-                attachments=[back_button]
-            )
-
-        elif payload == "admin_broadcast":
-            if user_id != ADMIN_ID:
-                return
-
-            admin_states[user_id] = "awaiting_broadcast"
-            exit_button = create_exit_button()
-            await bot.send_message(
-                chat_id=chat_id,
-                text=BROADCAST_MODE_TEXT,
-                attachments=[exit_button]
-            )
-
-        elif payload == "admin_add_term":
-            if user_id != ADMIN_ID:
-                return
-
-            admin_states[user_id] = "awaiting_term_add"
-            exit_button = create_exit_button()
-            await bot.send_message(
-                chat_id=chat_id,
-                text=ADD_TERM_TEXT,
-                attachments=[exit_button]
-            )
-
-        elif payload == "admin_del_term":
-            if user_id != ADMIN_ID:
-                return
-
-            admin_states[user_id] = "awaiting_term_del"
-            exit_button = create_exit_button()
-            await bot.send_message(
-                chat_id=chat_id,
-                text=DEL_TERM_TEXT,
-                attachments=[exit_button]
-            )
-
-        elif payload == "admin_export":
-            if user_id != ADMIN_ID:
-                return
-
-            users = get_all_users()
-            feedback = load_feedback()
-
-            users_file = f"users_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-            feedback_file = f"feedback_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-
-            with open(users_file, 'w', encoding='utf-8') as f:
-                json.dump(users, f, ensure_ascii=False, indent=2)
-
-            with open(feedback_file, 'w', encoding='utf-8') as f:
-                json.dump(feedback, f, ensure_ascii=False, indent=2)
-
-            response = f"📁 *Экспорт данных*\n\n"
-            response += f"👥 Пользователей: {len(users)}\n"
-            response += f"💬 Сообщений: {len(feedback)}\n\n"
-            response += f"Файлы созданы на сервере."
-
-            back_button = create_back_button()
-            await bot.send_message(
-                chat_id=chat_id,
-                text=response,
-                attachments=[back_button]
-            )
-
-        elif payload == "admin_logs":
-            if user_id != ADMIN_ID:
-                return
-
-            # Читаем последние 20 строк лога
-            log_file = "bot.log"
-            logs = "📋 *Последние логи*\n\n"
-            try:
-                with open(log_file, 'r', encoding='utf-8') as f:
-                    lines = f.readlines()[-20:]
-                    logs += "".join(lines[-20:])
-            except:
-                logs += "Логи не найдены"
-
-            back_button = create_back_button()
-            await bot.send_message(
-                chat_id=chat_id,
-                text=logs[:4000],
-                attachments=[back_button]
-            )
-
-        elif payload == "admin_find_user":
-            if user_id != ADMIN_ID:
-                return
-
-            admin_states[user_id] = "awaiting_find_user"
-            exit_button = create_exit_button()
-            await bot.send_message(
-                chat_id=chat_id,
-                text=FIND_USER_TEXT,
-                attachments=[exit_button]
-            )
-
-        # ===== ОБЩИЕ КНОПКИ =====
-
-        elif payload == "admin_back":
-            if user_id != ADMIN_ID:
-                return
-
-            admin_states.pop(user_id, None)
-            admin_menu = create_admin_menu()
-            await bot.send_message(
-                chat_id=chat_id,
-                text=ADMIN_WELCOME,
-                attachments=[admin_menu]
-            )
-
-        elif payload == "exit_mode":
-            clear_state(user_id)
-            admin_states.pop(user_id, None)
-            main_menu = create_main_menu()
-            await bot.send_message(
-                chat_id=chat_id,
-                text=EXIT_SEARCH_TEXT,
-                attachments=[main_menu]
-            )
-
-        # Отвечаем на callback (убираем "часики" на кнопке)
+        # Отвечаем на callback, чтобы убрать "часики"
         try:
-            if hasattr(callback_data, 'callback_id'):
-                await bot.send_callback(chat_id=chat_id, callback_id=callback_data.callback_id)
-        except:
-            pass
+            # Пробуем найти callback_id
+            callback_id = None
+            if callback_data and hasattr(callback_data, 'callback_id'):
+                callback_id = callback_data.callback_id
+            elif hasattr(event, 'callback_id'):
+                callback_id = event.callback_id
+
+            if callback_id:
+                await bot.send_callback(chat_id=182859032, callback_id=callback_id)
+        except Exception as e:
+            print(f"Ошибка при отправке callback: {e}")
 
     except Exception as e:
-        logger.error(f"❌ Ошибка обработки callback: {e}")
+        logger.error(f"❌ Ошибка диагностики: {e}")
         import traceback
         traceback.print_exc()
 
@@ -805,7 +610,7 @@ async def handle_callback(event):
 
 async def main():
     logger.info("=" * 60)
-    logger.info("🚀 ГЕОЛОГИЧЕСКИЙ БОТ (ПОЛНАЯ ВЕРСИЯ С КНОПКАМИ)")
+    logger.info("🚀 ГЕОЛОГИЧЕСКИЙ БОТ (ДИАГНОСТИЧЕСКАЯ ВЕРСИЯ)")
     logger.info("=" * 60)
     logger.info(f"📚 Терминов: {len(dictionary.terms) if dictionary else 0}")
     logger.info(f"👑 ADMIN_ID: {ADMIN_ID}")
