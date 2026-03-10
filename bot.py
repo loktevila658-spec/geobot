@@ -7,6 +7,7 @@ import logging
 import asyncio
 import os
 import sys
+import random
 from dotenv import load_dotenv
 from maxapi import Bot, Dispatcher
 from maxapi import types
@@ -122,20 +123,45 @@ EXIT_SEARCH_TEXT = """
 """
 
 
+# ==================== ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ====================
+
+def get_user_info(message):
+    """Получает информацию о пользователе из сообщения"""
+    from_user = message.from_user
+
+    # В вашей версии maxapi используются user_id вместо id
+    if hasattr(from_user, 'user_id'):
+        user_id = from_user.user_id
+    elif hasattr(from_user, 'id'):
+        user_id = from_user.id
+    else:
+        # Если ничего не нашли, пытаемся достать из словаря
+        user_id = getattr(from_user, 'user_id', 0)
+
+    first_name = from_user.first_name or "Пользователь"
+    username = from_user.username
+
+    return user_id, first_name, username
+
+
 # ==================== ОБРАБОТЧИК КОМАНДЫ /start ====================
 
 @dp.message_created(commands=['start'])
 async def cmd_start(message: types.Message):
     """Приветствие"""
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-    first_name = message.from_user.first_name or "Пользователь"
+    try:
+        user_id, first_name, username = get_user_info(message)
+        chat_id = message.chat.id
 
-    # Сохраняем пользователя
-    add_user(user_id, chat_id, None, first_name)
+        logger.info(f"📨 /start от {first_name} (ID:{user_id})")
 
-    # Отправляем приветствие
-    await message.answer(WELCOME_TEXT.format(name=first_name))
+        # Сохраняем пользователя
+        add_user(user_id, chat_id, username, first_name)
+
+        # Отправляем приветствие
+        await message.answer(WELCOME_TEXT.format(name=first_name))
+    except Exception as e:
+        logger.error(f"❌ Ошибка в /start: {e}")
 
 
 # ==================== ОБРАБОТЧИК КОМАНДЫ /поиск ====================
@@ -143,18 +169,22 @@ async def cmd_start(message: types.Message):
 @dp.message_created(commands=['поиск'])
 async def cmd_search_mode(message: types.Message):
     """Вход/выход из режима поиска"""
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-    current_state = get_state(user_id)
+    try:
+        user_id, first_name, username = get_user_info(message)
+        chat_id = message.chat.id
 
-    if current_state == UserState.AWAITING_TERM:
-        # Уже в режиме поиска - выходим
-        clear_state(user_id)
-        await message.answer(EXIT_SEARCH_TEXT)
-    else:
-        # Входим в режим поиска
-        set_state(user_id, UserState.AWAITING_TERM)
-        await message.answer(SEARCH_MODE_TEXT)
+        current_state = get_state(user_id)
+
+        if current_state == UserState.AWAITING_TERM:
+            # Уже в режиме поиска - выходим
+            clear_state(user_id)
+            await message.answer(EXIT_SEARCH_TEXT)
+        else:
+            # Входим в режим поиска
+            set_state(user_id, UserState.AWAITING_TERM)
+            await message.answer(SEARCH_MODE_TEXT)
+    except Exception as e:
+        logger.error(f"❌ Ошибка в /поиск: {e}")
 
 
 # ==================== ОБРАБОТЧИК КОМАНДЫ /связь ====================
@@ -162,14 +192,18 @@ async def cmd_search_mode(message: types.Message):
 @dp.message_created(commands=['связь'])
 async def cmd_feedback(message: types.Message):
     """Режим обратной связи"""
-    user_id = message.from_user.id
-    set_state(user_id, UserState.AWAITING_FEEDBACK)
+    try:
+        user_id, first_name, username = get_user_info(message)
 
-    await message.answer(
-        "📝 *Напишите ваше сообщение*\n\n"
-        "Я передам его разработчикам. Можно писать несколько сообщений подряд.\n\n"
-        "Чтобы выйти, снова введите /связь"
-    )
+        set_state(user_id, UserState.AWAITING_FEEDBACK)
+
+        await message.answer(
+            "📝 *Напишите ваше сообщение*\n\n"
+            "Я передам его разработчикам. Можно писать несколько сообщений подряд.\n\n"
+            "Чтобы выйти, снова введите /связь"
+        )
+    except Exception as e:
+        logger.error(f"❌ Ошибка в /связь: {e}")
 
 
 # ==================== ОБРАБОТЧИК КОМАНДЫ /помощь ====================
@@ -177,7 +211,10 @@ async def cmd_feedback(message: types.Message):
 @dp.message_created(commands=['помощь'])
 async def cmd_help(message: types.Message):
     """Справка"""
-    await message.answer(HELP_TEXT)
+    try:
+        await message.answer(HELP_TEXT)
+    except Exception as e:
+        logger.error(f"❌ Ошибка в /помощь: {e}")
 
 
 # ==================== ОБРАБОТЧИК КОМАНДЫ /источник ====================
@@ -185,7 +222,10 @@ async def cmd_help(message: types.Message):
 @dp.message_created(commands=['источник'])
 async def cmd_source(message: types.Message):
     """Информация о словаре"""
-    await message.answer(SOURCE_INFO)
+    try:
+        await message.answer(SOURCE_INFO)
+    except Exception as e:
+        logger.error(f"❌ Ошибка в /источник: {e}")
 
 
 # ==================== ОБРАБОТЧИК ТЕКСТОВЫХ СООБЩЕНИЙ ====================
@@ -194,7 +234,7 @@ async def cmd_source(message: types.Message):
 async def handle_text(message: types.Message):
     """Обработка текста в зависимости от режима"""
     try:
-        user_id = message.from_user.id
+        user_id, first_name, username = get_user_info(message)
         chat_id = message.chat.id
         text = message.text
 
@@ -246,7 +286,7 @@ async def handle_text(message: types.Message):
         # ===== РЕЖИМ ОБРАТНОЙ СВЯЗИ =====
         elif state == UserState.AWAITING_FEEDBACK:
             user = get_user(user_id)
-            user_name = user['name'] if user else "Пользователь"
+            user_name = user['name'] if user else first_name
             feedback_id = add_feedback(user_id, user_name, text)
             await message.answer(f"✅ Спасибо! Сообщение #{feedback_id} отправлено разработчикам.")
             return
@@ -263,6 +303,8 @@ async def handle_text(message: types.Message):
 
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 # ==================== КОМАНДЫ ДЛЯ АДМИНА ====================
@@ -270,24 +312,27 @@ async def handle_text(message: types.Message):
 @dp.message_created(commands=['stats'])
 async def cmd_stats(message: types.Message):
     """Статистика (только для админа)"""
-    user_id = message.from_user.id
-    chat_id = message.chat.id
+    try:
+        user_id, first_name, username = get_user_info(message)
+        chat_id = message.chat.id
 
-    if user_id != ADMIN_ID:
-        await message.answer("⛔ Эта команда только для администратора.")
-        return
+        if user_id != ADMIN_ID:
+            await message.answer("⛔ Эта команда только для администратора.")
+            return
 
-    users = get_all_users()
-    stats = get_feedback_stats()
+        users = get_all_users()
+        stats = get_feedback_stats()
 
-    response = f"""
+        response = f"""
 📊 *Статистика бота*
 
 👥 Пользователей: {len(users)}
 📚 Терминов: {len(dictionary.terms) if dictionary else 0}
 📬 Сообщений: {stats['total']} всего, {stats['unread']} новых
-    """
-    await message.answer(response)
+        """
+        await message.answer(response)
+    except Exception as e:
+        logger.error(f"❌ Ошибка в /stats: {e}")
 
 
 # ==================== ЗАПУСК ====================
