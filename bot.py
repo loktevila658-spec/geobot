@@ -1,6 +1,6 @@
 """
 Геологический бот для MAX
-Исправленная версия с правильными атрибутами
+Исправленная версия - использует bot.send_message вместо message.answer
 """
 
 import logging
@@ -122,7 +122,7 @@ EXIT_SEARCH_TEXT = """
 """
 
 
-# ==================== ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ====================
+# ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 
 def get_user_info(message):
     """Получает информацию о пользователе из сообщения"""
@@ -150,7 +150,7 @@ def get_user_info(message):
 def get_chat_id(message):
     """Получает chat_id из сообщения"""
     try:
-        # Пробуем разные варианты получения chat_id
+        # Пробуем получить chat_id из разных мест
         if hasattr(message, 'chat'):
             chat = message.chat
             if hasattr(chat, 'chat_id'):
@@ -158,9 +158,15 @@ def get_chat_id(message):
             elif hasattr(chat, 'id'):
                 return chat.id
 
-        # Если ничего не нашли, пробуем из recipient
+        # Пробуем из recipient
         if hasattr(message, 'recipient') and hasattr(message.recipient, 'chat_id'):
             return message.recipient.chat_id
+
+        # Если ничего не нашли, используем user_id как fallback
+        user_id, _, _ = get_user_info(message)
+        if user_id:
+            logger.warning(f"⚠️ Использую user_id как chat_id: {user_id}")
+            return user_id
 
         logger.warning("⚠️ Не удалось получить chat_id")
         return 0
@@ -180,12 +186,20 @@ async def cmd_start(message: types.Message):
 
         logger.info(f"📨 /start от {first_name} (ID:{user_id}) в чат {chat_id}")
 
-        # Сохраняем пользователя
         if user_id and chat_id:
+            # Сохраняем пользователя
             add_user(user_id, chat_id, username, first_name)
-            await message.answer(WELCOME_TEXT.format(name=first_name))
+
+            # Отправляем сообщение через bot.send_message
+            await bot.send_message(
+                chat_id=chat_id,
+                text=WELCOME_TEXT.format(name=first_name)
+            )
         else:
-            await message.answer("👋 Добро пожаловать! (не удалось идентифицировать пользователя)")
+            await bot.send_message(
+                chat_id=chat_id or 0,
+                text="👋 Добро пожаловать!"
+            )
 
     except Exception as e:
         logger.error(f"❌ Ошибка в /start: {e}")
@@ -198,19 +212,20 @@ async def cmd_search_mode(message: types.Message):
     """Вход/выход из режима поиска"""
     try:
         user_id, first_name, username = get_user_info(message)
+        chat_id = get_chat_id(message)
 
-        if not user_id:
-            await message.answer("❌ Ошибка идентификации пользователя")
+        if not user_id or not chat_id:
+            await bot.send_message(chat_id=chat_id or 0, text="❌ Ошибка идентификации")
             return
 
         current_state = get_state(user_id)
 
         if current_state == UserState.AWAITING_TERM:
             clear_state(user_id)
-            await message.answer(EXIT_SEARCH_TEXT)
+            await bot.send_message(chat_id=chat_id, text=EXIT_SEARCH_TEXT)
         else:
             set_state(user_id, UserState.AWAITING_TERM)
-            await message.answer(SEARCH_MODE_TEXT)
+            await bot.send_message(chat_id=chat_id, text=SEARCH_MODE_TEXT)
 
     except Exception as e:
         logger.error(f"❌ Ошибка в /поиск: {e}")
@@ -223,17 +238,19 @@ async def cmd_feedback(message: types.Message):
     """Режим обратной связи"""
     try:
         user_id, first_name, username = get_user_info(message)
+        chat_id = get_chat_id(message)
 
-        if not user_id:
-            await message.answer("❌ Ошибка идентификации пользователя")
+        if not user_id or not chat_id:
+            await bot.send_message(chat_id=chat_id or 0, text="❌ Ошибка идентификации")
             return
 
         set_state(user_id, UserState.AWAITING_FEEDBACK)
 
-        await message.answer(
-            "📝 *Напишите ваше сообщение*\n\n"
-            "Я передам его разработчикам.\n\n"
-            "Чтобы выйти, снова введите /связь"
+        await bot.send_message(
+            chat_id=chat_id,
+            text="📝 *Напишите ваше сообщение*\n\n"
+                 "Я передам его разработчикам.\n\n"
+                 "Чтобы выйти, снова введите /связь"
         )
     except Exception as e:
         logger.error(f"❌ Ошибка в /связь: {e}")
@@ -245,7 +262,8 @@ async def cmd_feedback(message: types.Message):
 async def cmd_help(message: types.Message):
     """Справка"""
     try:
-        await message.answer(HELP_TEXT)
+        chat_id = get_chat_id(message)
+        await bot.send_message(chat_id=chat_id, text=HELP_TEXT)
     except Exception as e:
         logger.error(f"❌ Ошибка в /помощь: {e}")
 
@@ -256,7 +274,8 @@ async def cmd_help(message: types.Message):
 async def cmd_source(message: types.Message):
     """Информация о словаре"""
     try:
-        await message.answer(SOURCE_INFO)
+        chat_id = get_chat_id(message)
+        await bot.send_message(chat_id=chat_id, text=SOURCE_INFO)
     except Exception as e:
         logger.error(f"❌ Ошибка в /источник: {e}")
 
@@ -268,9 +287,10 @@ async def handle_text(message: types.Message):
     """Обработка текста в зависимости от режима"""
     try:
         user_id, first_name, username = get_user_info(message)
+        chat_id = get_chat_id(message)
         text = message.text
 
-        if not user_id:
+        if not user_id or not chat_id:
             return
 
         # Пропускаем команды
@@ -283,7 +303,7 @@ async def handle_text(message: types.Message):
         # ===== РЕЖИМ ПОИСКА ТЕРМИНА =====
         if state == UserState.AWAITING_TERM:
             if not dictionary:
-                await message.answer("❌ Словарь не загружен")
+                await bot.send_message(chat_id=chat_id, text="❌ Словарь не загружен")
                 return
 
             result = dictionary.search(text, FUZZY_THRESHOLD, MAX_SUGGESTIONS)
@@ -297,7 +317,7 @@ async def handle_text(message: types.Message):
 ---
 {SOURCE_INFO}
                 """
-                await message.answer(response)
+                await bot.send_message(chat_id=chat_id, text=response)
 
             elif result['suggestions']:
                 suggestions = "\n".join([f"• {term}" for term in result['suggestions']])
@@ -307,10 +327,10 @@ async def handle_text(message: types.Message):
 Возможно, вы имели в виду:
 {suggestions}
                 """
-                await message.answer(response)
+                await bot.send_message(chat_id=chat_id, text=response)
 
             else:
-                await message.answer(f"❌ Термин *{text}* не найден")
+                await bot.send_message(chat_id=chat_id, text=f"❌ Термин *{text}* не найден")
 
             return
 
@@ -319,21 +339,27 @@ async def handle_text(message: types.Message):
             user = get_user(user_id)
             user_name = user['name'] if user else first_name
             feedback_id = add_feedback(user_id, user_name, text)
-            await message.answer(f"✅ Спасибо! Сообщение #{feedback_id} отправлено")
+            await bot.send_message(
+                chat_id=chat_id,
+                text=f"✅ Спасибо! Сообщение #{feedback_id} отправлено разработчикам."
+            )
             return
 
         # ===== НЕТ АКТИВНОГО РЕЖИМА =====
         else:
-            await message.answer(
-                "❓ *Неизвестная команда*\n\n"
-                "Используйте:\n"
-                "/поиск - найти термин\n"
-                "/связь - написать нам\n"
-                "/помощь - список команд"
+            await bot.send_message(
+                chat_id=chat_id,
+                text="❓ *Неизвестная команда*\n\n"
+                     "Используйте:\n"
+                     "/поиск - найти термин\n"
+                     "/связь - написать нам\n"
+                     "/помощь - список команд"
             )
 
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 # ==================== КОМАНДЫ ДЛЯ АДМИНА ====================
@@ -343,9 +369,10 @@ async def cmd_stats(message: types.Message):
     """Статистика (только для админа)"""
     try:
         user_id, first_name, username = get_user_info(message)
+        chat_id = get_chat_id(message)
 
         if user_id != ADMIN_ID:
-            await message.answer("⛔ Эта команда только для администратора")
+            await bot.send_message(chat_id=chat_id, text="⛔ Эта команда только для администратора")
             return
 
         users = get_all_users()
@@ -358,7 +385,7 @@ async def cmd_stats(message: types.Message):
 📚 Терминов: {len(dictionary.terms) if dictionary else 0}
 📬 Сообщений: {stats['total']} всего, {stats['unread']} новых
         """
-        await message.answer(response)
+        await bot.send_message(chat_id=chat_id, text=response)
     except Exception as e:
         logger.error(f"❌ Ошибка в /stats: {e}")
 
