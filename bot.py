@@ -1,6 +1,6 @@
 """
 Геологический бот для MAX
-Исправленная версия с правильной маршрутизацией команд
+Исправленная версия - убран импорт filters
 """
 
 import logging
@@ -10,7 +10,6 @@ import sys
 from dotenv import load_dotenv
 from maxapi import Bot, Dispatcher
 from maxapi import types
-from maxapi.filters import Command
 
 from utils.storage import (
     add_user, get_all_users, set_state, get_state, clear_state,
@@ -158,7 +157,10 @@ async def handle_message(event):
 
         # Если словарь не загружен
         if not dictionary:
-            await message.answer("❌ Ошибка: словарь не загружен. Обратитесь к администратору.")
+            await bot.send_message(
+                chat_id=chat_id,
+                text="❌ Ошибка: словарь не загружен. Обратитесь к администратору."
+            )
             return
 
         # Получаем состояние пользователя
@@ -168,17 +170,20 @@ async def handle_message(event):
 
         # Команда /start
         if text == '/start':
-            await message.answer(WELCOME_TEXT.format(name=first_name))
+            await bot.send_message(
+                chat_id=chat_id,
+                text=WELCOME_TEXT.format(name=first_name)
+            )
             return
 
         # Команда /помощь
         elif text == '/помощь':
-            await message.answer(HELP_TEXT)
+            await bot.send_message(chat_id=chat_id, text=HELP_TEXT)
             return
 
         # Команда /источник
         elif text == '/источник':
-            await message.answer(SOURCE_INFO)
+            await bot.send_message(chat_id=chat_id, text=SOURCE_INFO)
             return
 
         # Команда /поиск
@@ -186,11 +191,11 @@ async def handle_message(event):
             if state == UserState.AWAITING_TERM:
                 # Уже в режиме поиска - выходим
                 clear_state(user_id)
-                await message.answer(EXIT_SEARCH_TEXT)
+                await bot.send_message(chat_id=chat_id, text=EXIT_SEARCH_TEXT)
             else:
                 # Входим в режим поиска
                 set_state(user_id, UserState.AWAITING_TERM)
-                await message.answer(SEARCH_MODE_TEXT)
+                await bot.send_message(chat_id=chat_id, text=SEARCH_MODE_TEXT)
             return
 
         # Команда /связь
@@ -198,14 +203,18 @@ async def handle_message(event):
             if state == UserState.AWAITING_FEEDBACK:
                 # Уже в режиме связи - выходим
                 clear_state(user_id)
-                await message.answer("✅ Вы вышли из режима обратной связи.")
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text="✅ Вы вышли из режима обратной связи."
+                )
             else:
                 # Входим в режим связи
                 set_state(user_id, UserState.AWAITING_FEEDBACK)
-                await message.answer(
-                    "📝 *Напишите ваше сообщение*\n\n"
-                    "Я передам его разработчикам.\n\n"
-                    "Чтобы выйти, снова введите /связь"
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text="📝 *Напишите ваше сообщение*\n\n"
+                         "Я передам его разработчикам.\n\n"
+                         "Чтобы выйти, снова введите /связь"
                 )
             return
 
@@ -221,9 +230,12 @@ async def handle_message(event):
 📚 Терминов: {len(dictionary.terms) if dictionary else 0}
 📬 Сообщений: {stats['total']} всего, {stats['unread']} новых
                 """
-                await message.answer(response)
+                await bot.send_message(chat_id=chat_id, text=response)
             else:
-                await message.answer("⛔ Эта команда только для администратора.")
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text="⛔ Эта команда только для администратора."
+                )
             return
 
         # ===== ОБРАБОТКА РЕЖИМОВ =====
@@ -242,7 +254,7 @@ async def handle_message(event):
 ---
 {SOURCE_INFO}
                 """
-                await message.answer(response)
+                await bot.send_message(chat_id=chat_id, text=response)
 
             elif result['suggestions']:
                 suggestions = "\n".join([f"• {term}" for term in result['suggestions']])
@@ -252,10 +264,13 @@ async def handle_message(event):
 Возможно, вы имели в виду:
 {suggestions}
                 """
-                await message.answer(response)
+                await bot.send_message(chat_id=chat_id, text=response)
 
             else:
-                await message.answer(f"❌ Термин *{text}* не найден в словаре.")
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=f"❌ Термин *{text}* не найден в словаре."
+                )
 
             return
 
@@ -264,17 +279,21 @@ async def handle_message(event):
             user = get_user(user_id)
             user_name = user['name'] if user else first_name
             feedback_id = add_feedback(user_id, user_name, text)
-            await message.answer(f"✅ Спасибо! Сообщение #{feedback_id} отправлено разработчикам.")
+            await bot.send_message(
+                chat_id=chat_id,
+                text=f"✅ Спасибо! Сообщение #{feedback_id} отправлено разработчикам."
+            )
             return
 
         # Если нет активного режима и это не команда
         else:
-            await message.answer(
-                "❓ *Неизвестная команда*\n\n"
-                "Используйте:\n"
-                "/поиск - найти термин\n"
-                "/связь - написать нам\n"
-                "/помощь - список команд"
+            await bot.send_message(
+                chat_id=chat_id,
+                text="❓ *Неизвестная команда*\n\n"
+                     "Используйте:\n"
+                     "/поиск - найти термин\n"
+                     "/связь - написать нам\n"
+                     "/помощь - список команд"
             )
 
     except Exception as e:
@@ -287,7 +306,7 @@ async def handle_message(event):
 
 async def main():
     logger.info("=" * 60)
-    logger.info("🚀 ГЕОЛОГИЧЕСКИЙ БОТ (ИСПРАВЛЕННАЯ ВЕРСИЯ)")
+    logger.info("🚀 ГЕОЛОГИЧЕСКИЙ БОТ (ФИНАЛЬНАЯ ВЕРСИЯ)")
     logger.info("=" * 60)
     logger.info(f"📚 Терминов: {len(dictionary.terms) if dictionary else 0}")
     logger.info(f"👑 ADMIN_ID: {ADMIN_ID}")
