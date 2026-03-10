@@ -1,6 +1,6 @@
 """
 Геологический бот для MAX
-Полная версия с РАБОЧИМИ кнопками
+Полная версия с РАБОЧИМИ кнопками и админ-панелью
 """
 
 import logging
@@ -403,8 +403,7 @@ async def handle_message(event):
             term = term.strip()
             definition = definition.strip()
 
-            # Здесь должна быть функция добавления в словарь
-            # Пока просто сохраняем в отдельный файл
+            # Сохраняем новый термин в отдельный файл
             new_terms_file = "new_terms.txt"
             with open(new_terms_file, 'a', encoding='utf-8') as f:
                 f.write(f"{term}|{definition}\n")
@@ -419,7 +418,6 @@ async def handle_message(event):
         # Режим удаления термина
         if admin_state == "awaiting_term_del":
             term = text.strip()
-            # Здесь должна быть функция удаления
             await bot.send_message(
                 chat_id=chat_id,
                 text=f"❌ Функция удаления временно недоступна. Термин *{term}* не был удален."
@@ -751,8 +749,8 @@ async def handle_callback(event):
 
         # Отвечаем на callback (убираем "часики" на кнопке)
         try:
-            # В вашей версии send_callback не требует chat_id
-            await bot.send_callback(callback_id=callback.callback_id)
+            # В вашей версии send_callback принимает только callback_id
+            await bot.send_callback(callback.callback_id)
         except Exception as e:
             logger.warning(f"Не удалось отправить callback: {e}")
 
