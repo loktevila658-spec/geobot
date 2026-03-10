@@ -1,6 +1,6 @@
 """
 Геологический бот для MAX
-Исправленная версия - убран импорт filters
+Добавлена команда для просмотра обратной связи
 """
 
 import logging
@@ -15,7 +15,7 @@ from utils.storage import (
     add_user, get_all_users, set_state, get_state, clear_state,
     set_data, get_data, clear_data, UserState
 )
-from utils.feedback import add_feedback, get_feedback_stats
+from utils.feedback import add_feedback, get_feedback_stats, load_feedback, mark_as_read
 from utils.dictionary import GeologicalDictionary
 
 # Загружаем переменные из .env файла
@@ -86,13 +86,15 @@ HELP_TEXT = """
 
 ✉️ *Обратная связь*
 /связь - отправить сообщение разработчикам.
-Напишите, если нашли ошибку или хотите предложить новый термин.
 
 📚 *О словаре*
 /источник - информация об авторах и издании.
 
 📋 *Эта справка*
 /помощь - показать это сообщение.
+
+👑 *Команды администратора:*
+/feed - просмотр обратной связи
 
 Чтобы выйти из режима поиска, просто введите /поиск еще раз.
 """
@@ -218,7 +220,9 @@ async def handle_message(event):
                 )
             return
 
-        # Команда /stats (админская)
+        # ===== КОМАНДЫ ДЛЯ АДМИНА =====
+
+        # Команда /stats - статистика
         elif text == '/stats':
             if user_id == ADMIN_ID:
                 users = get_all_users()
@@ -236,6 +240,81 @@ async def handle_message(event):
                     chat_id=chat_id,
                     text="⛔ Эта команда только для администратора."
                 )
+            return
+
+        # Команда /feed - просмотр обратной связи
+        elif text == '/feed':
+            if user_id != ADMIN_ID:
+                await bot.send_message(chat_id=chat_id, text="⛔ Эта команда только для администратора.")
+                return
+
+            # Загружаем все сообщения
+            feedback = load_feedback()
+
+            if not feedback:
+                await bot.send_message(chat_id=chat_id, text="📭 Нет сообщений обратной связи.")
+                return
+
+            # Сортируем по дате (сначала новые)
+            feedback.sort(key=lambda x: x['created_at'], reverse=True)
+
+            # Берем последние 5 сообщений
+            recent = feedback[:5]
+
+            response = "📬 *Последние сообщения:*\n\n"
+            for msg in recent:
+                status = "🆕" if not msg['is_read'] else "✅"
+                response += f"{status} *#{msg['id']}* от {msg['user_name']} ({msg['created_at']}):\n"
+                response += f"_{msg['message'][:100]}{'...' if len(msg['message']) > 100 else ''}_\n\n"
+
+            response += f"Всего сообщений: {len(feedback)}, непрочитано: {len([m for m in feedback if not m['is_read']])}\n"
+            response += "Для просмотра конкретного сообщения: /view [id]"
+
+            await bot.send_message(chat_id=chat_id, text=response)
+            return
+
+        # Команда /view [id] - просмотр конкретного сообщения
+        elif text.startswith('/view'):
+            if user_id != ADMIN_ID:
+                await bot.send_message(chat_id=chat_id, text="⛔ Эта команда только для администратора.")
+                return
+
+            parts = text.split()
+            if len(parts) < 2:
+                await bot.send_message(chat_id=chat_id, text="❌ Используйте: /view [id сообщения]")
+                return
+
+            try:
+                msg_id = int(parts[1])
+            except ValueError:
+                await bot.send_message(chat_id=chat_id, text="❌ ID должен быть числом")
+                return
+
+            feedback = load_feedback()
+            msg = next((m for m in feedback if m['id'] == msg_id), None)
+
+            if not msg:
+                await bot.send_message(chat_id=chat_id, text=f"❌ Сообщение #{msg_id} не найдено")
+                return
+
+            # Отмечаем как прочитанное
+            mark_as_read(msg_id)
+
+            response = f"""
+📝 *Сообщение #{msg['id']}*
+
+👤 От: {msg['user_name']} (ID: {msg['user_id']})
+📅 Дата: {msg['created_at']}
+📌 Статус: {'✅ Прочитано' if msg['is_read'] else '🆕 Новое'}
+
+💬 *Текст:*
+{msg['message']}
+            """
+
+            if msg.get('reply'):
+                response += f"\n\n✉️ *Ответ:*\n{msg['reply']} (от {msg['replied_at']})"
+
+            await bot.send_message(chat_id=chat_id, text=response)
             return
 
         # ===== ОБРАБОТКА РЕЖИМОВ =====
@@ -306,7 +385,7 @@ async def handle_message(event):
 
 async def main():
     logger.info("=" * 60)
-    logger.info("🚀 ГЕОЛОГИЧЕСКИЙ БОТ (ФИНАЛЬНАЯ ВЕРСИЯ)")
+    logger.info("🚀 ГЕОЛОГИЧЕСКИЙ БОТ (С ПРОСМОТРОМ FEEDBACK)")
     logger.info("=" * 60)
     logger.info(f"📚 Терминов: {len(dictionary.terms) if dictionary else 0}")
     logger.info(f"👑 ADMIN_ID: {ADMIN_ID}")
