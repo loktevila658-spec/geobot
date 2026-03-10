@@ -1,21 +1,25 @@
 """
 Геологический бот для MAX
-Добавлена команда для просмотра обратной связи
+Полная версия с админ-панелью и пользовательскими кнопками
 """
 
 import logging
 import asyncio
 import os
 import sys
+import json
+from datetime import datetime
 from dotenv import load_dotenv
 from maxapi import Bot, Dispatcher
 from maxapi import types
+from maxapi.types import CallbackButton, ButtonsPayload, Attachment
+from maxapi.enums.intent import Intent
 
 from utils.storage import (
     add_user, get_all_users, set_state, get_state, clear_state,
     set_data, get_data, clear_data, UserState
 )
-from utils.feedback import add_feedback, get_feedback_stats, load_feedback, mark_as_read
+from utils.feedback import add_feedback, get_feedback_stats, load_feedback, mark_as_read, save_feedback
 from utils.dictionary import GeologicalDictionary
 
 # Загружаем переменные из .env файла
@@ -61,6 +65,119 @@ except Exception as e:
     logger.error(f"❌ Ошибка загрузки словаря: {e}")
     dictionary = None
 
+# Глобальные переменные для админ-режимов
+admin_states = {}  # {user_id: "awaiting_broadcast" / "awaiting_term_add" и т.д.}
+admin_data = {}  # временные данные для админ-операций
+
+
+# ==================== ФУНКЦИИ ДЛЯ СОЗДАНИЯ КНОПОК ====================
+
+def create_main_menu():
+    """Главное меню для пользователей"""
+    btn_search = CallbackButton(
+        text="🔍 Найти термин",
+        payload="user_search",
+        intent=Intent.DEFAULT
+    )
+    btn_feedback = CallbackButton(
+        text="💬 Обратная связь",
+        payload="user_feedback",
+        intent=Intent.POSITIVE
+    )
+    btn_info = CallbackButton(
+        text="📚 О словаре",
+        payload="user_info",
+        intent=Intent.DEFAULT
+    )
+    btn_help = CallbackButton(
+        text="❓ Помощь",
+        payload="user_help",
+        intent=Intent.DEFAULT
+    )
+
+    buttons_payload = ButtonsPayload(buttons=[
+        [btn_search, btn_feedback],
+        [btn_info, btn_help]
+    ])
+
+    return Attachment(type="inline_keyboard", payload=buttons_payload)
+
+
+def create_admin_menu():
+    """Админ-меню с кнопками"""
+    btn_stats = CallbackButton(
+        text="📊 Статистика",
+        payload="admin_stats",
+        intent=Intent.DEFAULT
+    )
+    btn_feed = CallbackButton(
+        text="📬 Сообщения",
+        payload="admin_feed",
+        intent=Intent.DEFAULT
+    )
+    btn_broadcast = CallbackButton(
+        text="📢 Рассылка",
+        payload="admin_broadcast",
+        intent=Intent.POSITIVE
+    )
+    btn_add_term = CallbackButton(
+        text="➕ Добавить термин",
+        payload="admin_add_term",
+        intent=Intent.DEFAULT
+    )
+    btn_del_term = CallbackButton(
+        text="➖ Удалить термин",
+        payload="admin_del_term",
+        intent=Intent.NEGATIVE
+    )
+    btn_export = CallbackButton(
+        text="📁 Экспорт",
+        payload="admin_export",
+        intent=Intent.DEFAULT
+    )
+    btn_logs = CallbackButton(
+        text="📋 Логи",
+        payload="admin_logs",
+        intent=Intent.DEFAULT
+    )
+    btn_find_user = CallbackButton(
+        text="🔍 Найти пользователя",
+        payload="admin_find_user",
+        intent=Intent.DEFAULT
+    )
+
+    buttons_payload = ButtonsPayload(buttons=[
+        [btn_stats, btn_feed],
+        [btn_broadcast, btn_add_term],
+        [btn_del_term, btn_export],
+        [btn_logs, btn_find_user]
+    ])
+
+    return Attachment(type="inline_keyboard", payload=buttons_payload)
+
+
+def create_exit_button():
+    """Кнопка для выхода из режима"""
+    btn_exit = CallbackButton(
+        text="❌ Выйти",
+        payload="exit_mode",
+        intent=Intent.NEGATIVE
+    )
+    buttons_payload = ButtonsPayload(buttons=[[btn_exit]])
+    return Attachment(type="inline_keyboard", payload=buttons_payload)
+
+
+def create_back_button():
+    """Кнопка возврата в админ-меню"""
+    btn_back = CallbackButton(
+        text="◀️ Назад",
+        payload="admin_back",
+        intent=Intent.DEFAULT
+    )
+    buttons_payload = ButtonsPayload(buttons=[[btn_back]])
+    return Attachment(type="inline_keyboard", payload=buttons_payload)
+
+
 # ==================== ТЕКСТЫ ====================
 
 WELCOME_TEXT = """
@@ -68,35 +185,23 @@ WELCOME_TEXT = """
 
 Я геологический словарь. Помогу найти определение любого геологического термина.
 
-📋 *Доступные команды:*
-/поиск - найти термин
-/связь - написать разработчикам
-/помощь - список команд
-/источник - информация о словаре
-
-Просто выберите команду 👇
+Нажмите на кнопку ниже, чтобы начать 👇
 """
 
 HELP_TEXT = """
-❓ *Команды бота:*
+❓ *Как пользоваться ботом:*
 
 🔍 *Поиск термина*
-/поиск - активировать режим поиска.
-После команды просто вводите слова, и я буду искать их в словаре.
+Нажмите кнопку "Найти термин", затем просто вводите слова.
 
 ✉️ *Обратная связь*
-/связь - отправить сообщение разработчикам.
+Нажмите кнопку "Обратная связь", напишите сообщение разработчикам.
 
 📚 *О словаре*
-/источник - информация об авторах и издании.
+Нажмите кнопку "О словаре" - информация об авторах.
 
-📋 *Эта справка*
-/помощь - показать это сообщение.
-
-👑 *Команды администратора:*
-/feed - просмотр обратной связи
-
-Чтобы выйти из режима поиска, просто введите /поиск еще раз.
+👑 *Для администратора*
+После /admin откроется панель управления.
 """
 
 SOURCE_INFO = """
@@ -110,17 +215,76 @@ SOURCE_INFO = """
 SEARCH_MODE_TEXT = """
 🔍 *Режим поиска активирован!*
 
-Теперь просто вводите геологические термины одним словом, и я буду показывать их определения.
+Теперь просто вводите геологические термины одним словом.
 
 Например: *базальт*, *гранит*, *известняк*
 
-Чтобы выйти из режима поиска, снова введите /поиск
+Чтобы выйти, нажмите кнопку ниже 👇
 """
 
 EXIT_SEARCH_TEXT = """
 ✅ Вы вышли из режима поиска.
 
-Используйте /поиск, чтобы снова искать термины.
+Используйте меню, чтобы выбрать действие.
+"""
+
+FEEDBACK_MODE_TEXT = """
+📝 *Режим обратной связи*
+
+Напишите ваше сообщение. Я передам его разработчикам.
+
+Чтобы выйти, нажмите кнопку ниже 👇
+"""
+
+ADMIN_WELCOME = """
+👑 *Панель администратора*
+
+Выберите действие:
+
+📊 Статистика - общая информация о боте
+📬 Сообщения - просмотр обратной связи
+📢 Рассылка - отправить сообщение всем пользователям
+➕ Добавить термин - пополнить словарь
+➖ Удалить термин - убрать термин из словаря
+📁 Экспорт - выгрузить данные пользователей/сообщений
+📋 Логи - последние события
+🔍 Найти пользователя - поиск по имени или ID
+"""
+
+BROADCAST_MODE_TEXT = """
+📢 *Режим рассылки*
+
+Отправьте сообщение, которое будет доставлено ВСЕМ пользователям бота.
+
+Напишите текст сообщения:
+"""
+
+ADD_TERM_TEXT = """
+➕ *Добавление термина*
+
+Введите термин и определение в формате:
+`термин | определение`
+
+Например:
+`Магма | Расплавленная масса в недрах Земли`
+"""
+
+DEL_TERM_TEXT = """
+➖ *Удаление термина*
+
+Введите название термина, который нужно удалить:
+"""
+
+EXPORT_TEXT = """
+📁 *Экспорт данных*
+
+Выберите, что хотите экспортировать:
+"""
+
+FIND_USER_TEXT = """
+🔍 *Поиск пользователя*
+
+Введите имя пользователя или ID:
 """
 
 
@@ -165,163 +329,137 @@ async def handle_message(event):
             )
             return
 
-        # Получаем состояние пользователя
+        # Получаем состояния
         state = get_state(user_id)
+        admin_state = admin_states.get(user_id)
 
-        # ===== ОБРАБОТКА КОМАНД ПО ТЕКСТУ =====
+        # ===== ОБРАБОТКА КОМАНД =====
 
         # Команда /start
         if text == '/start':
+            main_menu = create_main_menu()
             await bot.send_message(
                 chat_id=chat_id,
-                text=WELCOME_TEXT.format(name=first_name)
+                text=WELCOME_TEXT.format(name=first_name),
+                attachments=[main_menu]
             )
             return
 
-        # Команда /помощь
-        elif text == '/помощь':
-            await bot.send_message(chat_id=chat_id, text=HELP_TEXT)
-            return
-
-        # Команда /источник
-        elif text == '/источник':
-            await bot.send_message(chat_id=chat_id, text=SOURCE_INFO)
-            return
-
-        # Команда /поиск
-        elif text == '/поиск':
-            if state == UserState.AWAITING_TERM:
-                # Уже в режиме поиска - выходим
-                clear_state(user_id)
-                await bot.send_message(chat_id=chat_id, text=EXIT_SEARCH_TEXT)
-            else:
-                # Входим в режим поиска
-                set_state(user_id, UserState.AWAITING_TERM)
-                await bot.send_message(chat_id=chat_id, text=SEARCH_MODE_TEXT)
-            return
-
-        # Команда /связь
-        elif text == '/связь':
-            if state == UserState.AWAITING_FEEDBACK:
-                # Уже в режиме связи - выходим
-                clear_state(user_id)
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text="✅ Вы вышли из режима обратной связи."
-                )
-            else:
-                # Входим в режим связи
-                set_state(user_id, UserState.AWAITING_FEEDBACK)
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text="📝 *Напишите ваше сообщение*\n\n"
-                         "Я передам его разработчикам.\n\n"
-                         "Чтобы выйти, снова введите /связь"
-                )
-            return
-
-        # ===== КОМАНДЫ ДЛЯ АДМИНА =====
-
-        # Команда /stats - статистика
-        elif text == '/stats':
-            if user_id == ADMIN_ID:
-                users = get_all_users()
-                stats = get_feedback_stats()
-                response = f"""
-📊 *Статистика бота*
-
-👥 Пользователей: {len(users)}
-📚 Терминов: {len(dictionary.terms) if dictionary else 0}
-📬 Сообщений: {stats['total']} всего, {stats['unread']} новых
-                """
-                await bot.send_message(chat_id=chat_id, text=response)
-            else:
+        # Команда /admin (только для админа)
+        if text == '/admin':
+            if user_id != ADMIN_ID:
                 await bot.send_message(
                     chat_id=chat_id,
                     text="⛔ Эта команда только для администратора."
                 )
+                return
+
+            admin_menu = create_admin_menu()
+            await bot.send_message(
+                chat_id=chat_id,
+                text=ADMIN_WELCOME,
+                attachments=[admin_menu]
+            )
             return
 
-        # Команда /feed - просмотр обратной связи
-        elif text == '/feed':
-            if user_id != ADMIN_ID:
-                await bot.send_message(chat_id=chat_id, text="⛔ Эта команда только для администратора.")
+        # ===== ОБРАБОТКА АДМИН-РЕЖИМОВ =====
+
+        # Режим рассылки
+        if admin_state == "awaiting_broadcast":
+            users = get_all_users()
+            if not users:
+                await bot.send_message(chat_id=chat_id, text="⚠️ Нет пользователей для рассылки.")
+                admin_states.pop(user_id, None)
                 return
 
-            # Загружаем все сообщения
-            feedback = load_feedback()
+            success = 0
+            failed = 0
+            await bot.send_message(chat_id=chat_id, text=f"📤 Начинаю рассылку {len(users)} пользователям...")
 
-            if not feedback:
-                await bot.send_message(chat_id=chat_id, text="📭 Нет сообщений обратной связи.")
-                return
+            for user_id_str, user_data in users.items():
+                try:
+                    user_chat_id = user_data.get('chat_id')
+                    if user_chat_id:
+                        await bot.send_message(
+                            chat_id=user_chat_id,
+                            text=f"📢 *Сообщение от администратора:*\n\n{text}"
+                        )
+                        success += 1
+                        await asyncio.sleep(0.1)
+                except:
+                    failed += 1
 
-            # Сортируем по дате (сначала новые)
-            feedback.sort(key=lambda x: x['created_at'], reverse=True)
-
-            # Берем последние 5 сообщений
-            recent = feedback[:5]
-
-            response = "📬 *Последние сообщения:*\n\n"
-            for msg in recent:
-                status = "🆕" if not msg['is_read'] else "✅"
-                response += f"{status} *#{msg['id']}* от {msg['user_name']} ({msg['created_at']}):\n"
-                response += f"_{msg['message'][:100]}{'...' if len(msg['message']) > 100 else ''}_\n\n"
-
-            response += f"Всего сообщений: {len(feedback)}, непрочитано: {len([m for m in feedback if not m['is_read']])}\n"
-            response += "Для просмотра конкретного сообщения: /view [id]"
-
-            await bot.send_message(chat_id=chat_id, text=response)
+            await bot.send_message(
+                chat_id=chat_id,
+                text=f"✅ Рассылка завершена!\n✓ Успешно: {success}\n✗ Ошибок: {failed}"
+            )
+            admin_states.pop(user_id, None)
             return
 
-        # Команда /view [id] - просмотр конкретного сообщения
-        elif text.startswith('/view'):
-            if user_id != ADMIN_ID:
-                await bot.send_message(chat_id=chat_id, text="⛔ Эта команда только для администратора.")
+        # Режим добавления термина
+        if admin_state == "awaiting_term_add":
+            if '|' not in text:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text="❌ Неверный формат. Используйте: `термин | определение`"
+                )
                 return
 
-            parts = text.split()
-            if len(parts) < 2:
-                await bot.send_message(chat_id=chat_id, text="❌ Используйте: /view [id сообщения]")
-                return
+            term, definition = text.split('|', 1)
+            term = term.strip()
+            definition = definition.strip()
 
-            try:
-                msg_id = int(parts[1])
-            except ValueError:
-                await bot.send_message(chat_id=chat_id, text="❌ ID должен быть числом")
-                return
+            # Здесь должна быть функция добавления в словарь
+            # Пока просто сохраняем в отдельный файл
+            new_terms_file = "new_terms.txt"
+            with open(new_terms_file, 'a', encoding='utf-8') as f:
+                f.write(f"{term}|{definition}\n")
 
-            feedback = load_feedback()
-            msg = next((m for m in feedback if m['id'] == msg_id), None)
-
-            if not msg:
-                await bot.send_message(chat_id=chat_id, text=f"❌ Сообщение #{msg_id} не найдено")
-                return
-
-            # Отмечаем как прочитанное
-            mark_as_read(msg_id)
-
-            response = f"""
-📝 *Сообщение #{msg['id']}*
-
-👤 От: {msg['user_name']} (ID: {msg['user_id']})
-📅 Дата: {msg['created_at']}
-📌 Статус: {'✅ Прочитано' if msg['is_read'] else '🆕 Новое'}
-
-💬 *Текст:*
-{msg['message']}
-            """
-
-            if msg.get('reply'):
-                response += f"\n\n✉️ *Ответ:*\n{msg['reply']} (от {msg['replied_at']})"
-
-            await bot.send_message(chat_id=chat_id, text=response)
+            await bot.send_message(
+                chat_id=chat_id,
+                text=f"✅ Термин *{term}* добавлен в очередь на утверждение."
+            )
+            admin_states.pop(user_id, None)
             return
 
-        # ===== ОБРАБОТКА РЕЖИМОВ =====
+        # Режим удаления термина
+        if admin_state == "awaiting_term_del":
+            term = text.strip()
+            # Здесь должна быть функция удаления
+            await bot.send_message(
+                chat_id=chat_id,
+                text=f"❌ Функция удаления временно недоступна. Термин *{term}* не был удален."
+            )
+            admin_states.pop(user_id, None)
+            return
+
+        # Режим поиска пользователя
+        if admin_state == "awaiting_find_user":
+            users = get_all_users()
+            found = []
+
+            # Поиск по ID или имени
+            for uid, data in users.items():
+                if text == uid or text.lower() in data.get('name', '').lower():
+                    found.append((uid, data))
+
+            if not found:
+                await bot.send_message(chat_id=chat_id, text="❌ Пользователь не найден.")
+            else:
+                response = "🔍 *Найденные пользователи:*\n\n"
+                for uid, data in found:
+                    response += f"👤 {data.get('name', '—')} (ID: {uid})\n"
+                    response += f"📅 Регистрация: {data.get('created_at', '—')}\n"
+                    response += f"📊 Запросов: {data.get('total_requests', 0)}\n\n"
+                await bot.send_message(chat_id=chat_id, text=response)
+
+            admin_states.pop(user_id, None)
+            return
+
+        # ===== ОБРАБОТКА РЕЖИМОВ ПОЛЬЗОВАТЕЛЯ =====
 
         # Если в режиме поиска
         if state == UserState.AWAITING_TERM:
-            # Ищем термин
             result = dictionary.search(text, FUZZY_THRESHOLD, MAX_SUGGESTIONS)
 
             if result['found']:
@@ -350,30 +488,40 @@ async def handle_message(event):
                     chat_id=chat_id,
                     text=f"❌ Термин *{text}* не найден в словаре."
                 )
-
             return
 
         # Если в режиме обратной связи
-        elif state == UserState.AWAITING_FEEDBACK:
+        if state == UserState.AWAITING_FEEDBACK:
             user = get_user(user_id)
             user_name = user['name'] if user else first_name
             feedback_id = add_feedback(user_id, user_name, text)
+
             await bot.send_message(
                 chat_id=chat_id,
                 text=f"✅ Спасибо! Сообщение #{feedback_id} отправлено разработчикам."
             )
+
+            # Уведомление админу
+            if ADMIN_ID != 0:
+                admin_notification = f"""
+📬 *Новое сообщение!*
+👤 {user_name} (ID: {user_id})
+💬 {text[:200]}
+🔍 /view {feedback_id}
+                """
+                try:
+                    await bot.send_message(chat_id=ADMIN_ID, text=admin_notification)
+                except:
+                    pass
             return
 
-        # Если нет активного режима и это не команда
-        else:
-            await bot.send_message(
-                chat_id=chat_id,
-                text="❓ *Неизвестная команда*\n\n"
-                     "Используйте:\n"
-                     "/поиск - найти термин\n"
-                     "/связь - написать нам\n"
-                     "/помощь - список команд"
-            )
+        # Если нет режима
+        main_menu = create_main_menu()
+        await bot.send_message(
+            chat_id=chat_id,
+            text="❓ Используйте кнопки меню для навигации:",
+            attachments=[main_menu]
+        )
 
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
@@ -381,11 +529,240 @@ async def handle_message(event):
         traceback.print_exc()
 
 
+# ==================== ОБРАБОТЧИК НАЖАТИЙ НА КНОПКИ ====================
+
+@dp.message_callback()
+async def handle_callback(event):
+    """Обработчик нажатий на inline-кнопки"""
+    try:
+        callback = event.callback
+        user_id = callback.from_user.user_id
+        chat_id = callback.message.chat_id
+        payload = callback.payload
+
+        logger.info(f"🔘 Нажата кнопка: {payload} от {user_id}")
+
+        # ===== КНОПКИ ПОЛЬЗОВАТЕЛЯ =====
+
+        if payload == "user_search":
+            set_state(user_id, UserState.AWAITING_TERM)
+            exit_button = create_exit_button()
+            await bot.send_message(
+                chat_id=chat_id,
+                text=SEARCH_MODE_TEXT,
+                attachments=[exit_button]
+            )
+
+        elif payload == "user_feedback":
+            set_state(user_id, UserState.AWAITING_FEEDBACK)
+            exit_button = create_exit_button()
+            await bot.send_message(
+                chat_id=chat_id,
+                text=FEEDBACK_MODE_TEXT,
+                attachments=[exit_button]
+            )
+
+        elif payload == "user_info":
+            await bot.send_message(
+                chat_id=chat_id,
+                text=SOURCE_INFO
+            )
+
+        elif payload == "user_help":
+            main_menu = create_main_menu()
+            await bot.send_message(
+                chat_id=chat_id,
+                text=HELP_TEXT,
+                attachments=[main_menu]
+            )
+
+        # ===== КНОПКИ АДМИНА =====
+
+        elif payload == "admin_stats":
+            if user_id != ADMIN_ID:
+                return
+
+            users = get_all_users()
+            stats = get_feedback_stats()
+            response = f"""
+📊 *Статистика бота*
+
+👥 *Пользователи:* {len(users)}
+📚 *Термины:* {len(dictionary.terms) if dictionary else 0}
+📬 *Сообщения:* {stats['total']} всего, {stats['unread']} новых
+
+👑 *Администратор:* {ADMIN_ID}
+            """
+            back_button = create_back_button()
+            await bot.send_message(
+                chat_id=chat_id,
+                text=response,
+                attachments=[back_button]
+            )
+
+        elif payload == "admin_feed":
+            if user_id != ADMIN_ID:
+                return
+
+            feedback = load_feedback()
+            if not feedback:
+                await bot.send_message(chat_id=chat_id, text="📭 Нет сообщений.")
+                return
+
+            feedback.sort(key=lambda x: x['created_at'], reverse=True)
+            recent = feedback[:5]
+
+            response = "📬 *Последние сообщения:*\n\n"
+            for msg in recent:
+                status = "🆕" if not msg['is_read'] else "✅"
+                response += f"{status} #{msg['id']} от {msg['user_name']}: "
+                response += f"{msg['message'][:50]}...\n"
+                response += f"📅 {msg['created_at']}\n\n"
+
+            response += f"Всего: {len(feedback)}, непрочитано: {stats['unread']}\n"
+            response += "Для просмотра: /view [id]"
+
+            back_button = create_back_button()
+            await bot.send_message(
+                chat_id=chat_id,
+                text=response,
+                attachments=[back_button]
+            )
+
+        elif payload == "admin_broadcast":
+            if user_id != ADMIN_ID:
+                return
+
+            admin_states[user_id] = "awaiting_broadcast"
+            exit_button = create_exit_button()
+            await bot.send_message(
+                chat_id=chat_id,
+                text=BROADCAST_MODE_TEXT,
+                attachments=[exit_button]
+            )
+
+        elif payload == "admin_add_term":
+            if user_id != ADMIN_ID:
+                return
+
+            admin_states[user_id] = "awaiting_term_add"
+            exit_button = create_exit_button()
+            await bot.send_message(
+                chat_id=chat_id,
+                text=ADD_TERM_TEXT,
+                attachments=[exit_button]
+            )
+
+        elif payload == "admin_del_term":
+            if user_id != ADMIN_ID:
+                return
+
+            admin_states[user_id] = "awaiting_term_del"
+            exit_button = create_exit_button()
+            await bot.send_message(
+                chat_id=chat_id,
+                text=DEL_TERM_TEXT,
+                attachments=[exit_button]
+            )
+
+        elif payload == "admin_export":
+            if user_id != ADMIN_ID:
+                return
+
+            # Создаем временные файлы для экспорта
+            users = get_all_users()
+            feedback = load_feedback()
+
+            users_file = f"users_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            feedback_file = f"feedback_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+
+            with open(users_file, 'w', encoding='utf-8') as f:
+                json.dump(users, f, ensure_ascii=False, indent=2)
+
+            with open(feedback_file, 'w', encoding='utf-8') as f:
+                json.dump(feedback, f, ensure_ascii=False, indent=2)
+
+            response = f"📁 *Экспорт данных*\n\n"
+            response += f"👥 Пользователей: {len(users)}\n"
+            response += f"💬 Сообщений: {len(feedback)}\n\n"
+            response += f"Файлы созданы на сервере."
+
+            back_button = create_back_button()
+            await bot.send_message(
+                chat_id=chat_id,
+                text=response,
+                attachments=[back_button]
+            )
+
+        elif payload == "admin_logs":
+            if user_id != ADMIN_ID:
+                return
+
+            # Читаем последние 20 строк лога
+            log_file = "bot.log"
+            logs = "📋 *Последние логи*\n\n"
+            try:
+                with open(log_file, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()[-20:]
+                    logs += "".join(lines[-20:])
+            except:
+                logs += "Логи не найдены"
+
+            back_button = create_back_button()
+            await bot.send_message(
+                chat_id=chat_id,
+                text=logs[:4000],  # Ограничение длины сообщения
+                attachments=[back_button]
+            )
+
+        elif payload == "admin_find_user":
+            if user_id != ADMIN_ID:
+                return
+
+            admin_states[user_id] = "awaiting_find_user"
+            exit_button = create_exit_button()
+            await bot.send_message(
+                chat_id=chat_id,
+                text=FIND_USER_TEXT,
+                attachments=[exit_button]
+            )
+
+        # ===== ОБЩИЕ КНОПКИ =====
+
+        elif payload == "admin_back":
+            if user_id != ADMIN_ID:
+                return
+
+            admin_states.pop(user_id, None)
+            admin_menu = create_admin_menu()
+            await bot.send_message(
+                chat_id=chat_id,
+                text=ADMIN_WELCOME,
+                attachments=[admin_menu]
+            )
+
+        elif payload == "exit_mode":
+            clear_state(user_id)
+            admin_states.pop(user_id, None)
+            main_menu = create_main_menu()
+            await bot.send_message(
+                chat_id=chat_id,
+                text=EXIT_SEARCH_TEXT,
+                attachments=[main_menu]
+            )
+
+        # Отвечаем на callback
+        await bot.send_callback(chat_id=chat_id, callback_id=callback.callback_id)
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка обработки callback: {e}")
+
+
 # ==================== ЗАПУСК ====================
 
 async def main():
     logger.info("=" * 60)
-    logger.info("🚀 ГЕОЛОГИЧЕСКИЙ БОТ (С ПРОСМОТРОМ FEEDBACK)")
+    logger.info("🚀 ГЕОЛОГИЧЕСКИЙ БОТ (ПОЛНАЯ ВЕРСИЯ)")
     logger.info("=" * 60)
     logger.info(f"📚 Терминов: {len(dictionary.terms) if dictionary else 0}")
     logger.info(f"👑 ADMIN_ID: {ADMIN_ID}")
