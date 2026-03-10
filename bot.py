@@ -16,7 +16,7 @@ from maxapi.types import CallbackButton, ButtonsPayload, Attachment
 from maxapi.enums.intent import Intent
 
 from utils.storage import (
-    add_user, get_all_users, set_state, get_state, clear_state,
+    add_user, get_user, get_all_users, set_state, get_state, clear_state,
     set_data, get_data, clear_data, UserState
 )
 from utils.feedback import add_feedback, get_feedback_stats, load_feedback, mark_as_read, save_feedback
@@ -503,8 +503,8 @@ async def handle_message(event):
                 """
                 try:
                     await bot.send_message(chat_id=ADMIN_ID, text=admin_notification)
-                except:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Не удалось отправить уведомление админу: {e}")
             return
 
         # Если нет режима
@@ -747,10 +747,13 @@ async def handle_callback(event):
                 attachments=[main_menu]
             )
 
-        # Отвечаем на callback (убираем "часики" на кнопке)
+        # Отвечаем на callback (убираем "часики" на кнопке) - ИСПРАВЛЕНО
         try:
-            # В вашей версии send_callback принимает только callback_id
-            await bot.send_callback(callback.callback_id)
+            # Правильный формат для вашей версии API
+            await bot.send_callback(
+                callback_id=callback.callback_id,
+                text="✅"  # Небольшой текст, который увидит пользователь
+            )
         except Exception as e:
             logger.warning(f"Не удалось отправить callback: {e}")
 
@@ -764,7 +767,7 @@ async def handle_callback(event):
 
 async def main():
     logger.info("=" * 60)
-    logger.info("🚀 ГЕОЛОГИЧЕСКИЙ БОТ (С РАБОЧИМИ КНОПКАМИ)")
+    logger.info("🚀 ГЕОЛОГИЧЕСКИЙ БОТ (ФИНАЛЬНАЯ ВЕРСИЯ)")
     logger.info("=" * 60)
     logger.info(f"📚 Терминов: {len(dictionary.terms) if dictionary else 0}")
     logger.info(f"👑 ADMIN_ID: {ADMIN_ID}")
