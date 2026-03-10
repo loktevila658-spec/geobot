@@ -16,7 +16,7 @@ from maxapi.types import CallbackButton, ButtonsPayload, Attachment
 from maxapi.enums.intent import Intent
 
 from utils.storage import (
-    add_user, get_user, get_all_users, set_state, get_state, clear_state,
+    add_user, get_all_users, set_state, get_state, clear_state,
     set_data, get_data, clear_data, UserState
 )
 from utils.feedback import add_feedback, get_feedback_stats, load_feedback, mark_as_read, save_feedback
@@ -484,8 +484,8 @@ async def handle_message(event):
 
         # Если в режиме обратной связи
         if state == UserState.AWAITING_FEEDBACK:
-            user = get_user(user_id)
-            user_name = user['name'] if user else first_name
+            # Используем first_name вместо get_user
+            user_name = first_name
             feedback_id = add_feedback(user_id, user_name, text)
 
             await bot.send_message(
@@ -749,10 +749,10 @@ async def handle_callback(event):
 
         # Отвечаем на callback (убираем "часики" на кнопке) - ИСПРАВЛЕНО
         try:
-            # Правильный формат для вашей версии API
+            # В некоторых версиях API нужно отправлять пустой ответ
             await bot.send_callback(
                 callback_id=callback.callback_id,
-                text="✅"  # Небольшой текст, который увидит пользователь
+                text=" "  # Пробел вместо пустоты
             )
         except Exception as e:
             logger.warning(f"Не удалось отправить callback: {e}")
