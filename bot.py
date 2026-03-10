@@ -1,6 +1,7 @@
 """
 Геологический бот для MAX
 Полная версия с админ-панелью и пользовательскими кнопками
+Исправлен обработчик callback для корректной работы кнопок
 """
 
 import logging
@@ -535,10 +536,46 @@ async def handle_message(event):
 async def handle_callback(event):
     """Обработчик нажатий на inline-кнопки"""
     try:
-        callback = event.callback
-        user_id = callback.from_user.user_id
-        chat_id = callback.message.chat_id
-        payload = callback.payload
+        # ВАЖНО: В вашей версии maxapi объект callback может быть в другом месте
+        # Пробуем разные варианты получения данных
+
+        # Вариант 1: callback лежит в event.callback
+        if hasattr(event, 'callback'):
+            callback_data = event.callback
+        # Вариант 2: callback лежит в event.message_callback
+        elif hasattr(event, 'message_callback'):
+            callback_data = event.message_callback
+        else:
+            logger.error("❌ Не удалось найти callback в event")
+            return
+
+        # Получаем user_id разными способами
+        user_id = None
+        if hasattr(callback_data, 'from_user') and hasattr(callback_data.from_user, 'user_id'):
+            user_id = callback_data.from_user.user_id
+        elif hasattr(callback_data, 'user_id'):
+            user_id = callback_data.user_id
+        elif hasattr(event, 'user_id'):
+            user_id = event.user_id
+
+        # Получаем chat_id
+        chat_id = None
+        if hasattr(callback_data, 'message') and hasattr(callback_data.message, 'chat_id'):
+            chat_id = callback_data.message.chat_id
+        elif hasattr(event, 'chat_id'):
+            chat_id = event.chat_id
+
+        # Получаем payload
+        payload = None
+        if hasattr(callback_data, 'payload'):
+            payload = callback_data.payload
+        elif hasattr(callback_data, 'data'):
+            payload = callback_data.data
+
+        if not user_id or not chat_id or not payload:
+            logger.error(
+                f"❌ Не удалось получить данные callback: user_id={user_id}, chat_id={chat_id}, payload={payload}")
+            return
 
         logger.info(f"🔘 Нажата кнопка: {payload} от {user_id}")
 
@@ -609,6 +646,7 @@ async def handle_callback(event):
                 await bot.send_message(chat_id=chat_id, text="📭 Нет сообщений.")
                 return
 
+            stats = get_feedback_stats()
             feedback.sort(key=lambda x: x['created_at'], reverse=True)
             recent = feedback[:5]
 
@@ -669,7 +707,6 @@ async def handle_callback(event):
             if user_id != ADMIN_ID:
                 return
 
-            # Создаем временные файлы для экспорта
             users = get_all_users()
             feedback = load_feedback()
 
@@ -711,7 +748,7 @@ async def handle_callback(event):
             back_button = create_back_button()
             await bot.send_message(
                 chat_id=chat_id,
-                text=logs[:4000],  # Ограничение длины сообщения
+                text=logs[:4000],
                 attachments=[back_button]
             )
 
@@ -751,18 +788,24 @@ async def handle_callback(event):
                 attachments=[main_menu]
             )
 
-        # Отвечаем на callback
-        await bot.send_callback(chat_id=chat_id, callback_id=callback.callback_id)
+        # Отвечаем на callback (убираем "часики" на кнопке)
+        try:
+            if hasattr(callback_data, 'callback_id'):
+                await bot.send_callback(chat_id=chat_id, callback_id=callback_data.callback_id)
+        except:
+            pass
 
     except Exception as e:
         logger.error(f"❌ Ошибка обработки callback: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 # ==================== ЗАПУСК ====================
 
 async def main():
     logger.info("=" * 60)
-    logger.info("🚀 ГЕОЛОГИЧЕСКИЙ БОТ (ПОЛНАЯ ВЕРСИЯ)")
+    logger.info("🚀 ГЕОЛОГИЧЕСКИЙ БОТ (ПОЛНАЯ ВЕРСИЯ С КНОПКАМИ)")
     logger.info("=" * 60)
     logger.info(f"📚 Терминов: {len(dictionary.terms) if dictionary else 0}")
     logger.info(f"👑 ADMIN_ID: {ADMIN_ID}")
