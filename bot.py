@@ -1,6 +1,7 @@
 """
 Геологический бот для MAX
-Полная версия с РАБОЧИМИ кнопками и админ-панелью
+Полная версия с поддержкой нового словаря (7 колонок)
+Все существующие функции сохранены
 """
 
 import logging
@@ -57,10 +58,17 @@ MAX_SUGGESTIONS = int(os.environ.get('MAX_SUGGESTIONS', 5))
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 
-# Инициализация словаря
+# Инициализация словаря (НОВАЯ ВЕРСИЯ)
 try:
     dictionary = GeologicalDictionary(DICTIONARY_FILE)
-    logger.info(f"✅ Загружено {len(dictionary.terms)} терминов")
+    logger.info(f"✅ Загружено {len(dictionary.terms)} терминов из нового словаря")
+
+    # Дополнительная статистика по новым полям
+    stats = dictionary.get_stats()
+    logger.info(f"📊 Статистика словаря: {stats['total']} терминов, "
+                f"с синонимами: {stats['with_synonym']}, "
+                f"с формулами: {stats['with_formula']}, "
+                f"с классификацией: {stats['with_classification']}")
 except Exception as e:
     logger.error(f"❌ Ошибка загрузки словаря: {e}")
     dictionary = None
@@ -145,12 +153,18 @@ def create_admin_menu():
         payload="admin_find_user",
         intent=Intent.DEFAULT
     )
+    btn_dict_stats = CallbackButton(
+        text="📚 Статистика словаря",
+        payload="admin_dict_stats",
+        intent=Intent.DEFAULT
+    )
 
     buttons_payload = ButtonsPayload(buttons=[
         [btn_stats, btn_feed],
         [btn_broadcast, btn_add_term],
         [btn_del_term, btn_export],
-        [btn_logs, btn_find_user]
+        [btn_logs, btn_find_user],
+        [btn_dict_stats]
     ])
 
     return Attachment(type="inline_keyboard", payload=buttons_payload)
@@ -249,6 +263,7 @@ ADMIN_WELCOME = """
 📁 Экспорт - выгрузить данные пользователей/сообщений
 📋 Логи - последние события
 🔍 Найти пользователя - поиск по имени или ID
+📚 Статистика словаря - информация о наполнении словаря
 """
 
 BROADCAST_MODE_TEXT = """
@@ -452,18 +467,44 @@ async def handle_message(event):
 
         # Если в режиме поиска
         if state == UserState.AWAITING_TERM:
+            # Ищем в словаре (НОВАЯ ВЕРСИЯ)
             result = dictionary.search(text, FUZZY_THRESHOLD, MAX_SUGGESTIONS)
 
             if result['found']:
+                # Формируем информационный блок с использованием новых полей
+                info_lines = []
+
+                # Синоним
+                if result.get('synonym') and result['synonym'] != 'nan' and result['synonym']:
+                    info_lines.append(f"📝 *Синоним:* {result['synonym']}")
+
+                # Происхождение
+                if result.get('origin') and result['origin'] != 'nan' and result['origin']:
+                    info_lines.append(f"📚 *Происхождение:* {result['origin']}")
+
+                # Формула
+                if result.get('formula') and result['formula'] != 'nan' and result['formula']:
+                    info_lines.append(f"🧪 *Формула:* {result['formula']}")
+
+                # Описание
+                if result.get('definition') and result['definition'] != 'nan':
+                    info_lines.append(f"📖 *Описание:* {result['definition']}")
+
+                # Классификация
+                if result.get('classification') and result['classification'] != 'nan' and result['classification']:
+                    info_lines.append(f"🏷️ *Классификация:* {result['classification']}")
+
+                info_block = '\n'.join(info_lines) if info_lines else "Информация отсутствует"
+
                 response = f"""
 🔍 *{result['term']}*
 
-{result['definition']}
+{info_block}
 
 ---
 {SOURCE_INFO}
                 """
-                await bot.send_message(chat_id=chat_id, text=response)
+                await bot.send_message(chat_id=chat_id, text=response, reply_markup=get_main_keyboard())
 
             elif result['suggestions']:
                 suggestions = "\n".join([f"• {term}" for term in result['suggestions']])
@@ -473,24 +514,26 @@ async def handle_message(event):
 Возможно, вы имели в виду:
 {suggestions}
                 """
-                await bot.send_message(chat_id=chat_id, text=response)
+                await bot.send_message(chat_id=chat_id, text=response, reply_markup=get_main_keyboard())
 
             else:
                 await bot.send_message(
                     chat_id=chat_id,
-                    text=f"❌ Термин *{text}* не найден в словаре."
+                    text=f"❌ Термин *{text}* не найден в словаре.",
+                    reply_markup=get_main_keyboard()
                 )
+            clear_state(user_id)
             return
 
         # Если в режиме обратной связи
         if state == UserState.AWAITING_FEEDBACK:
-            # Используем first_name вместо get_user
             user_name = first_name
             feedback_id = add_feedback(user_id, user_name, text)
 
             await bot.send_message(
                 chat_id=chat_id,
-                text=f"✅ Спасибо! Сообщение #{feedback_id} отправлено разработчикам."
+                text=f"✅ Спасибо! Сообщение #{feedback_id} отправлено разработчикам.",
+                reply_markup=get_main_keyboard()
             )
 
             # Уведомление админу
@@ -521,7 +564,7 @@ async def handle_message(event):
         traceback.print_exc()
 
 
-# ==================== ИСПРАВЛЕННЫЙ ОБРАБОТЧИК НАЖАТИЙ НА КНОПКИ ====================
+# ==================== ОБРАБОТЧИК НАЖАТИЙ НА КНОПКИ ====================
 
 @dp.message_callback()
 async def handle_callback(event):
@@ -586,6 +629,31 @@ async def handle_callback(event):
 
 👑 *Администратор:* {ADMIN_ID}
             """
+            back_button = create_back_button()
+            await bot.send_message(
+                chat_id=chat_id,
+                text=response,
+                attachments=[back_button]
+            )
+
+        elif payload == "admin_dict_stats":
+            if user_id != ADMIN_ID:
+                return
+
+            if dictionary:
+                stats = dictionary.get_stats()
+                response = f"""
+📚 *Статистика словаря*
+
+📊 Всего терминов: {stats['total']}
+📝 С синонимами: {stats['with_synonym']}
+📚 С происхождением: {stats['with_origin']}
+🧪 С формулами: {stats['with_formula']}
+🏷️ С классификацией: {stats['with_classification']}
+                """
+            else:
+                response = "❌ Словарь не загружен"
+
             back_button = create_back_button()
             await bot.send_message(
                 chat_id=chat_id,
@@ -747,12 +815,11 @@ async def handle_callback(event):
                 attachments=[main_menu]
             )
 
-        # Отвечаем на callback (убираем "часики" на кнопке) - ИСПРАВЛЕНО
+        # Отвечаем на callback
         try:
-            # В некоторых версиях API нужно отправлять пустой ответ
             await bot.send_callback(
                 callback_id=callback.callback_id,
-                text=" "  # Пробел вместо пустоты
+                text=" "
             )
         except Exception as e:
             logger.warning(f"Не удалось отправить callback: {e}")
@@ -767,9 +834,14 @@ async def handle_callback(event):
 
 async def main():
     logger.info("=" * 60)
-    logger.info("🚀 ГЕОЛОГИЧЕСКИЙ БОТ (ФИНАЛЬНАЯ ВЕРСИЯ)")
+    logger.info("🚀 ГЕОЛОГИЧЕСКИЙ БОТ (НОВАЯ ВЕРСИЯ СЛОВАРЯ)")
     logger.info("=" * 60)
     logger.info(f"📚 Терминов: {len(dictionary.terms) if dictionary else 0}")
+    if dictionary:
+        stats = dictionary.get_stats()
+        logger.info(f"📊 С синонимами: {stats['with_synonym']}")
+        logger.info(f"📚 С происхождением: {stats['with_origin']}")
+        logger.info(f"🧪 С формулами: {stats['with_formula']}")
     logger.info(f"👑 ADMIN_ID: {ADMIN_ID}")
     logger.info("=" * 60)
 
