@@ -1,7 +1,7 @@
 """
 Геологический бот для MAX
 Полная версия с поддержкой нового словаря (7 колонок)
-ИСПРАВЛЕНО: используются правильные параметры для MAX API
+ИСПРАВЛЕНО: все параметры для MAX API
 """
 
 import logging
@@ -526,7 +526,7 @@ async def handle_message(event):
 📚 Краткий геологический словарь для школьников
 Под ред. Г. И. Немкова — М.: Недра, 1989.
                 """
-                # ИСПРАВЛЕНО: используем keyboard вместо reply_markup
+                # ИСПРАВЛЕНО: keyboard вместо reply_markup
                 await bot.send_message(
                     chat_id=chat_id,
                     text=response,
@@ -541,6 +541,7 @@ async def handle_message(event):
 Возможно, вы имели в виду:
 {suggestions}
                 """
+                # ИСПРАВЛЕНО: keyboard вместо reply_markup
                 await bot.send_message(
                     chat_id=chat_id,
                     text=response,
@@ -548,6 +549,7 @@ async def handle_message(event):
                 )
 
             else:
+                # ИСПРАВЛЕНО: keyboard вместо reply_markup
                 await bot.send_message(
                     chat_id=chat_id,
                     text=f"❌ Термин *{text}* не найден в словаре.",
@@ -561,6 +563,7 @@ async def handle_message(event):
             user_name = first_name
             feedback_id = add_feedback(user_id, user_name, text)
 
+            # ИСПРАВЛЕНО: keyboard вместо reply_markup
             await bot.send_message(
                 chat_id=chat_id,
                 text=f"✅ Спасибо! Сообщение #{feedback_id} отправлено разработчикам.",
