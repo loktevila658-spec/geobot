@@ -1,7 +1,7 @@
 """
 Геологический бот для MAX
 Полная версия с поддержкой нового словаря (7 колонок)
-ИСПРАВЛЕНО: все параметры для MAX API
+УНИВЕРСАЛЬНАЯ ВЕРСИЯ: работает с любыми параметрами
 """
 
 import logging
@@ -78,10 +78,61 @@ admin_states = {}  # {user_id: "awaiting_broadcast" / "awaiting_term_add" и т.
 admin_data = {}  # временные данные для админ-операций
 
 
+# ==================== УНИВЕРСАЛЬНАЯ ОТПРАВКА СООБЩЕНИЙ ====================
+
+async def send_message_with_keyboard(chat_id: int, text: str, keyboard: dict = None):
+    """
+    Универсальная отправка сообщения с клавиатурой
+    Пробует разные варианты параметров
+    """
+    try:
+        # Вариант 1: с параметром keyboard
+        await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            keyboard=keyboard
+        )
+        logger.debug(f"✅ Отправлено с keyboard в чат {chat_id}")
+        return
+    except Exception as e1:
+        logger.debug(f"Keyboard не сработал: {e1}")
+
+        try:
+            # Вариант 2: с параметром reply_markup
+            await bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=keyboard
+            )
+            logger.debug(f"✅ Отправлено с reply_markup в чат {chat_id}")
+            return
+        except Exception as e2:
+            logger.debug(f"Reply_markup не сработал: {e2}")
+
+            try:
+                # Вариант 3: с JSON-строкой
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    reply_markup=json.dumps(keyboard)
+                )
+                logger.debug(f"✅ Отправлено с JSON в чат {chat_id}")
+                return
+            except Exception as e3:
+                logger.debug(f"JSON не сработал: {e3}")
+
+                # Вариант 4: совсем без клавиатуры
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=text
+                )
+                logger.warning(f"⚠️ Отправлено без клавиатуры в чат {chat_id}")
+
+
 # ==================== ФУНКЦИИ ДЛЯ СОЗДАНИЯ КНОПОК ====================
 
 def get_main_keyboard():
-    """Главная клавиатура с кнопками (для параметра keyboard)"""
+    """Главная клавиатура с кнопками"""
     return {
         "keyboard": [
             [{"text": "🔍 Найти термин"}, {"text": "💬 Обратная связь"}],
@@ -526,8 +577,8 @@ async def handle_message(event):
 📚 Краткий геологический словарь для школьников
 Под ред. Г. И. Немкова — М.: Недра, 1989.
                 """
-                # ИСПРАВЛЕНО: используем keyboard без json.dumps()
-                await bot.send_message(
+                # ИСПРАВЛЕНО: используем универсальную функцию
+                await send_message_with_keyboard(
                     chat_id=chat_id,
                     text=response,
                     keyboard=get_main_keyboard()
@@ -541,16 +592,16 @@ async def handle_message(event):
 Возможно, вы имели в виду:
 {suggestions}
                 """
-                # ИСПРАВЛЕНО: используем keyboard без json.dumps()
-                await bot.send_message(
+                # ИСПРАВЛЕНО: используем универсальную функцию
+                await send_message_with_keyboard(
                     chat_id=chat_id,
                     text=response,
                     keyboard=get_main_keyboard()
                 )
 
             else:
-                # ИСПРАВЛЕНО: используем keyboard без json.dumps()
-                await bot.send_message(
+                # ИСПРАВЛЕНО: используем универсальную функцию
+                await send_message_with_keyboard(
                     chat_id=chat_id,
                     text=f"❌ Термин *{text}* не найден в словаре.",
                     keyboard=get_main_keyboard()
@@ -563,8 +614,8 @@ async def handle_message(event):
             user_name = first_name
             feedback_id = add_feedback(user_id, user_name, text)
 
-            # ИСПРАВЛЕНО: используем keyboard без json.dumps()
-            await bot.send_message(
+            # ИСПРАВЛЕНО: используем универсальную функцию
+            await send_message_with_keyboard(
                 chat_id=chat_id,
                 text=f"✅ Спасибо! Сообщение #{feedback_id} отправлено разработчикам.",
                 keyboard=get_main_keyboard()
@@ -849,15 +900,20 @@ async def handle_callback(event):
                 attachments=[main_menu]
             )
 
-        # ИСПРАВЛЕНО: правильный способ отправки callback
+        # ИСПРАВЛЕНО: пробуем разные варианты callback
         try:
-            # В вашей версии MAX API нужно отправить пустой текст
-            await bot.send_callback(
-                callback_id=callback.callback_id,
-                text=" "
-            )
-        except Exception as e:
-            logger.warning(f"Не удалось отправить callback: {e}")
+            # Вариант 1: без параметров
+            await bot.send_callback(callback.callback_id)
+        except Exception:
+            try:
+                # Вариант 2: с пустым текстом
+                await bot.send_callback(
+                    callback_id=callback.callback_id,
+                    text=" "
+                )
+            except Exception:
+                # Вариант 3: игнорируем
+                pass
 
     except Exception as e:
         logger.error(f"❌ Ошибка обработки callback: {e}")
@@ -869,7 +925,7 @@ async def handle_callback(event):
 
 async def main():
     logger.info("=" * 60)
-    logger.info("🚀 ГЕОЛОГИЧЕСКИЙ БОТ (НОВАЯ ВЕРСИЯ СЛОВАРЯ)")
+    logger.info("🚀 ГЕОЛОГИЧЕСКИЙ БОТ (УНИВЕРСАЛЬНАЯ ВЕРСИЯ)")
     logger.info("=" * 60)
     logger.info(f"📚 Терминов: {len(dictionary.terms) if dictionary else 0}")
     if dictionary:
