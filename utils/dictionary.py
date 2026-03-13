@@ -1,7 +1,6 @@
 """
 Модуль для работы с геологическим словарем
 Новый формат: A(буква)/B(термин)/C(синоним)/D(происхождение)/E(формула)/F(описание)/G(классификация)
-Все остальные функции бота остаются без изменений
 """
 
 import pandas as pd
@@ -29,12 +28,42 @@ class GeologicalDictionary:
                 logger.error(f"❌ Файл {self.excel_file} не найден!")
                 return
 
-            # Загружаем Excel с указанными колонками
-            df = pd.read_excel(
-                self.excel_file,
-                header=None,
-                names=['letter', 'term', 'synonym', 'origin', 'formula', 'description', 'classification']
-            )
+            # Пробуем разные способы чтения Excel
+            try:
+                # Способ 1: с указанием header=None (нет заголовков)
+                df = pd.read_excel(self.excel_file, header=None)
+                logger.info(f"✅ Файл прочитан, колонок: {len(df.columns)}")
+
+                # Проверяем количество колонок
+                if len(df.columns) >= 7:
+                    # Назначаем имена колонкам
+                    df.columns = ['letter', 'term', 'synonym', 'origin', 'formula', 'description',
+                                  'classification'] + list(df.columns[7:])
+                else:
+                    logger.error(f"❌ В файле только {len(df.columns)} колонок, нужно минимум 7")
+                    # Создаем недостающие колонки
+                    for i in range(len(df.columns), 7):
+                        df[i] = ''
+                    df.columns = ['letter', 'term', 'synonym', 'origin', 'formula', 'description', 'classification']
+
+            except Exception as e:
+                logger.error(f"❌ Ошибка чтения Excel: {e}")
+                # Способ 2: пробуем с engine='openpyxl'
+                try:
+                    df = pd.read_excel(self.excel_file, header=None, engine='openpyxl')
+                    if len(df.columns) >= 7:
+                        df.columns = ['letter', 'term', 'synonym', 'origin', 'formula', 'description',
+                                      'classification'] + list(df.columns[7:])
+                    else:
+                        for i in range(len(df.columns), 7):
+                            df[i] = ''
+                        df.columns = ['letter', 'term', 'synonym', 'origin', 'formula', 'description', 'classification']
+                except Exception as e2:
+                    logger.error(f"❌ Ошибка чтения Excel openpyxl: {e2}")
+                    return
+
+            # Удаляем полностью пустые строки
+            df = df.dropna(how='all')
 
             # Удаляем строки без термина
             df = df.dropna(subset=['term'])
@@ -42,34 +71,59 @@ class GeologicalDictionary:
             # Заполняем пустые значения
             df = df.fillna('')
 
-            # Преобразуем в строки
+            # Преобразуем все в строки и очищаем
             for col in df.columns:
-                df[col] = df[col].astype(str)
+                df[col] = df[col].astype(str).str.strip()
+
+            # Фильтруем строки, где термин не пустой и не равен 'nan'
+            df = df[df['term'].apply(lambda x: x and x.lower() != 'nan' and len(x) > 0)]
 
             # Заполняем словарь
-            for _, row in df.iterrows():
-                term = row['term'].strip()
-                if not term:
+            term_count = 0
+            for idx, row in df.iterrows():
+                term = row['term']
+                if not term or term == 'nan':
                     continue
 
                 term_lower = term.lower()
 
-                # Сохраняем всю информацию о термине
+                # Очищаем значения от 'nan'
+                synonym = row['synonym'] if row['synonym'] != 'nan' else ''
+                origin = row['origin'] if row['origin'] != 'nan' else ''
+                formula = row['formula'] if row['formula'] != 'nan' else ''
+                description = row['description'] if row['description'] != 'nan' else ''
+                classification = row['classification'] if row['classification'] != 'nan' else ''
+                letter = row['letter'] if row['letter'] != 'nan' else (term[0].upper() if term else '')
+
                 self.terms[term_lower] = {
                     'term': term,
-                    'letter': row['letter'].strip(),
-                    'synonym': row['synonym'].strip(),
-                    'origin': row['origin'].strip(),
-                    'formula': row['formula'].strip(),
-                    'description': row['description'].strip(),
-                    'classification': row['classification'].strip()
+                    'letter': letter,
+                    'synonym': synonym,
+                    'origin': origin,
+                    'formula': formula,
+                    'description': description,
+                    'classification': classification
                 }
                 self.all_terms.append(term)
+                term_count += 1
 
-            logger.info(f"✅ Загружено {len(self.terms)} терминов из {self.excel_file}")
+            logger.info(f"✅ Загружено {term_count} терминов из {self.excel_file}")
+
+            # Считаем статистику
+            with_synonym = len([t for t in self.terms.values() if t['synonym'] and t['synonym'] != ''])
+            with_origin = len([t for t in self.terms.values() if t['origin'] and t['origin'] != ''])
+            with_formula = len([t for t in self.terms.values() if t['formula'] and t['formula'] != ''])
+            with_classification = len(
+                [t for t in self.terms.values() if t['classification'] and t['classification'] != ''])
+
+            logger.info(f"📊 Статистика: всего {term_count}, с синонимами: {with_synonym}, "
+                        f"с происхождением: {with_origin}, с формулами: {with_formula}, "
+                        f"с классификацией: {with_classification}")
 
         except Exception as e:
-            logger.error(f"❌ Ошибка загрузки словаря: {e}")
+            logger.error(f"❌ Критическая ошибка загрузки словаря: {e}")
+            import traceback
+            traceback.print_exc()
             self.terms = {}
             self.all_terms = []
 
@@ -150,34 +204,39 @@ class GeologicalDictionary:
         lines = []
 
         # Синоним (если есть)
-        if term_data['synonym'] and term_data['synonym'] != 'nan':
+        if term_data['synonym'] and term_data['synonym'] != '':
             lines.append(f"📝 *Синоним:* {term_data['synonym']}")
 
         # Происхождение (если есть)
-        if term_data['origin'] and term_data['origin'] != 'nan':
+        if term_data['origin'] and term_data['origin'] != '':
             lines.append(f"📚 *Происхождение:* {term_data['origin']}")
 
         # Формула (если есть)
-        if term_data['formula'] and term_data['formula'] != 'nan':
+        if term_data['formula'] and term_data['formula'] != '':
             lines.append(f"🧪 *Формула:* {term_data['formula']}")
 
         # Описание (всегда есть)
-        if term_data['description'] and term_data['description'] != 'nan':
+        if term_data['description'] and term_data['description'] != '':
             lines.append(f"📖 *Описание:* {term_data['description']}")
 
         # Классификация (если есть)
-        if term_data['classification'] and term_data['classification'] != 'nan':
+        if term_data['classification'] and term_data['classification'] != '':
             lines.append(f"🏷️ *Классификация:* {term_data['classification']}")
 
-        return '\n'.join(lines)
+        return '\n'.join(lines) if lines else "Информация отсутствует"
 
     def get_stats(self) -> Dict:
         """Статистика словаря"""
+        total = len(self.terms)
+        with_synonym = len([t for t in self.terms.values() if t['synonym'] and t['synonym'] != ''])
+        with_origin = len([t for t in self.terms.values() if t['origin'] and t['origin'] != ''])
+        with_formula = len([t for t in self.terms.values() if t['formula'] and t['formula'] != ''])
+        with_classification = len([t for t in self.terms.values() if t['classification'] and t['classification'] != ''])
+
         return {
-            'total': len(self.terms),
-            'with_synonym': len([t for t in self.terms.values() if t['synonym'] and t['synonym'] != 'nan']),
-            'with_origin': len([t for t in self.terms.values() if t['origin'] and t['origin'] != 'nan']),
-            'with_formula': len([t for t in self.terms.values() if t['formula'] and t['formula'] != 'nan']),
-            'with_classification': len(
-                [t for t in self.terms.values() if t['classification'] and t['classification'] != 'nan'])
+            'total': total,
+            'with_synonym': with_synonym,
+            'with_origin': with_origin,
+            'with_formula': with_formula,
+            'with_classification': with_classification
         }
