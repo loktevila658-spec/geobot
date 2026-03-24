@@ -1,6 +1,7 @@
 """
 Модуль для работы с геологическим словарем
 Новый формат: A(буква)/B(термин)/C(синоним)/D(происхождение)/E(формула)/F(описание)/G(классификация)
+Добавлена поддержка исправления опечаток
 """
 
 import pandas as pd
@@ -8,6 +9,7 @@ import Levenshtein
 import logging
 import os
 from typing import Dict, List, Optional
+from difflib import SequenceMatcher
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +21,7 @@ class GeologicalDictionary:
         self.excel_file = excel_file
         self.terms = {}  # {lowercase_term: вся информация}
         self.all_terms = []  # список всех терминов
+        self.term_index = {}  # индекс для быстрого поиска по первым буквам
         self.load_dictionary()
 
     def load_dictionary(self):
@@ -105,6 +108,13 @@ class GeologicalDictionary:
                     'classification': classification
                 }
                 self.all_terms.append(term)
+                
+                # Создаем индекс для первых 3 букв
+                prefix = term_lower[:3]
+                if prefix not in self.term_index:
+                    self.term_index[prefix] = []
+                self.term_index[prefix].append(term_lower)
+                
                 term_count += 1
 
             logger.info(f"✅ Загружено {term_count} терминов из {self.excel_file}")
@@ -133,32 +143,126 @@ class GeologicalDictionary:
             return None
         return self.terms.get(query.lower().strip())
 
-    def find_similar(self, query: str, threshold: float = 0.7, max_results: int = 5) -> List[str]:
-        """Поиск похожих терминов (исправление опечаток)"""
-        if len(query) < 3 or not self.all_terms:
-            return []
-
-        query_lower = query.lower().strip()
-        suggestions = []
-
-        for term in self.all_terms:
-            term_lower = term.lower()
-            try:
-                ratio = Levenshtein.ratio(query_lower, term_lower)
+    def suggest_with_fix(self, user_input: str, threshold: float = 0.7, max_suggestions: int = 5):
+        """
+        Улучшенный поиск с предложением исправления опечаток
+        Возвращает: (найденный_термин, список_предложений, сообщение_об_исправлении)
+        """
+        if len(user_input) < 2:
+            return None, [], f"❌ Слишком короткий запрос: '{user_input}'"
+            
+        # Нормализуем ввод
+        user_input_lower = user_input.lower().strip()
+        
+        # Сначала точный поиск
+        if user_input_lower in self.terms:
+            return self.terms[user_input_lower], [], None
+        
+        # Поиск по синонимам
+        for term, data in self.terms.items():
+            synonym = data.get('synonym', '')
+            if synonym and isinstance(synonym, str):
+                synonym_lower = synonym.lower()
+                if user_input_lower == synonym_lower:
+                    return data, [], f"🔍 Возможно, вы искали: *{data['term']}* (синоним)"
+        
+        # Собираем все варианты для нечёткого поиска
+        candidates = []
+        
+        # Ограничим поиск только терминами с похожим началом для производительности
+        prefix = user_input_lower[:3]
+        potential_terms = self.term_index.get(prefix, [])
+        
+        # Если нет по индексу, проверяем все
+        if not potential_terms:
+            potential_terms = list(self.terms.keys())
+        else:
+            # Добавляем ещё несколько случайных для безопасности
+            import random
+            if len(self.terms) > 100:
+                potential_terms.extend(random.sample(list(self.terms.keys()), min(50, len(self.terms))))
+        
+        # Проверяем основные термины
+        for term_lower in set(potential_terms):
+            term_data = self.terms[term_lower]
+            
+            # Проверяем на похожесть
+            ratio = SequenceMatcher(None, user_input_lower, term_lower).ratio()
+            
+            # Особые случаи: опечатки в 1 букву
+            if len(user_input_lower) > 3 and len(term_lower) > 3:
+                # Проверка на замену одной буквы
+                if len(user_input_lower) == len(term_lower):
+                    diff_count = sum(1 for a, b in zip(user_input_lower, term_lower) if a != b)
+                    if diff_count == 1:
+                        ratio = max(ratio, 0.9)  # Повышаем рейтинг для односимвольных ошибок
+                
+                # Проверка на пропущенную букву
+                if len(user_input_lower) == len(term_lower) - 1:
+                    # Вставка буквы
+                    for i in range(len(term_lower)):
+                        if term_lower[:i] + term_lower[i+1:] == user_input_lower:
+                            ratio = max(ratio, 0.9)
+                            break
+                
+                # Проверка на лишнюю букву
+                if len(user_input_lower) == len(term_lower) + 1:
+                    # Удаление буквы
+                    for i in range(len(user_input_lower)):
+                        if user_input_lower[:i] + user_input_lower[i+1:] == term_lower:
+                            ratio = max(ratio, 0.9)
+                            break
+            
+            if ratio >= threshold:
+                candidates.append((term_lower, ratio, 'term'))
+        
+        # Проверяем синонимы (только для потенциальных терминов)
+        for term_lower in set(potential_terms):
+            term_data = self.terms[term_lower]
+            synonym = term_data.get('synonym', '')
+            if synonym and isinstance(synonym, str) and synonym.lower() != 'nan':
+                synonym_lower = synonym.lower()
+                ratio = SequenceMatcher(None, user_input_lower, synonym_lower).ratio()
                 if ratio >= threshold:
-                    suggestions.append((term, ratio))
-            except:
-                continue
-
-        suggestions.sort(key=lambda x: x[1], reverse=True)
-        return [term for term, _ in suggestions[:max_results]]
+                    candidates.append((term_lower, ratio, 'synonym'))
+        
+        # Сортируем по рейтингу
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        
+        # Берём уникальные термины
+        seen = set()
+        unique_candidates = []
+        for term_lower, ratio, match_type in candidates:
+            if term_lower not in seen:
+                seen.add(term_lower)
+                unique_candidates.append((term_lower, ratio, match_type))
+        
+        if unique_candidates:
+            best_term_lower, best_ratio, best_type = unique_candidates[0]
+            best_term_data = self.terms[best_term_lower]
+            
+            # Если нашли очень похожий вариант (выше 0.85)
+            if best_ratio > 0.85:
+                if best_type == 'synonym':
+                    return best_term_data, [], f"🔍 Возможно, вы искали: *{best_term_data['term']}*"
+                else:
+                    # Проверяем, является ли это исправлением опечатки
+                    if best_term_lower != user_input_lower:
+                        correction_msg = f"🤔 Возможно, вы имели в виду: *{best_term_data['term']}*?"
+                        suggestions = [self.terms[t]['term'] for t, _, _ in unique_candidates[:max_suggestions]]
+                        return best_term_data, suggestions, correction_msg
+                    else:
+                        return best_term_data, [], None
+            
+            # Если нашли похожие, но не очень
+            suggestions = [self.terms[t]['term'] for t, _, _ in unique_candidates[:max_suggestions]]
+            return None, suggestions, f"🤔 Термин *{user_input}* не найден. Возможно, вы имели в виду:"
+        
+        return None, [], f"❌ Термин *{user_input}* не найден в словаре."
 
     def search(self, query: str, threshold: float = 0.7, max_suggestions: int = 5) -> Dict:
         """
-        Полноценный поиск:
-        - Если найден точно → возвращает всю информацию
-        - Если есть похожие → возвращает список
-        - Если ничего нет → возвращает пустой результат
+        Полноценный поиск с исправлением опечаток
         """
         result = {
             'found': False,
@@ -168,14 +272,16 @@ class GeologicalDictionary:
             'origin': None,
             'formula': None,
             'classification': None,
-            'suggestions': []
+            'suggestions': [],
+            'correction_message': None
         }
 
-        if not query:
+        if not query or len(query.strip()) == 0:
+            result['correction_message'] = "❌ Пустой запрос"
             return result
 
-        # Прямой поиск
-        term_data = self.find_term(query)
+        term_data, suggestions, message = self.suggest_with_fix(query, threshold, max_suggestions)
+
         if term_data:
             result['found'] = True
             result['term'] = term_data['term']
@@ -184,12 +290,10 @@ class GeologicalDictionary:
             result['origin'] = term_data['origin']
             result['formula'] = term_data['formula']
             result['classification'] = term_data['classification']
-            return result
-
-        # Поиск похожих
-        suggestions = self.find_similar(query, threshold, max_suggestions)
-        if suggestions:
+            result['correction_message'] = message
+        else:
             result['suggestions'] = suggestions
+            result['correction_message'] = message
 
         return result
 
