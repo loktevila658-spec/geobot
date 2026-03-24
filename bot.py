@@ -143,12 +143,13 @@ def get_main_keyboard():
 
 
 def get_exit_keyboard():
-    """Клавиатура с кнопкой выхода"""
+    """Клавиатура с кнопкой выхода из режима"""
     return {
         "keyboard": [
             [{"text": "❌ Выйти из режима"}]
         ],
-        "resize_keyboard": True
+        "resize_keyboard": True,
+        "one_time_keyboard": False
     }
 
 
@@ -243,7 +244,7 @@ def create_admin_menu():
 
 
 def create_exit_button():
-    """Кнопка для выхода из режима"""
+    """Кнопка для выхода из режима (inline)"""
     btn_exit = CallbackButton(
         text="❌ Выйти",
         payload="exit_mode",
@@ -278,7 +279,9 @@ HELP_TEXT = """
 ❓ *Как пользоваться ботом:*
 
 🔍 *Поиск термина*
-Нажмите кнопку "Найти термин", затем просто вводите слова.
+Нажмите кнопку "Найти термин", затем просто вводите слова. 
+После каждого поиска вы остаётесь в режиме, чтобы искать дальше.
+Чтобы выйти, нажмите "❌ Выйти из режима".
 
 ✉️ *Обратная связь*
 Нажмите кнопку "Обратная связь", напишите сообщение разработчикам.
@@ -299,19 +302,19 @@ SOURCE_INFO = """
 """
 
 SEARCH_MODE_TEXT = """
-🔍 *Режим поиска активирован!*
+🔍 *Режим поиска*
 
-Теперь просто вводите геологические термины одним словом.
+Теперь просто вводите геологические термины.
+Я буду искать их в словаре и показывать информацию.
 
-Например: *базальт*, *гранит*, *известняк*
-
-Чтобы выйти, нажмите кнопку ниже 👇
+После каждого поиска вы остаётесь в режиме.
+Чтобы выйти, нажмите кнопку внизу 👇
 """
 
 EXIT_SEARCH_TEXT = """
 ✅ Вы вышли из режима поиска.
 
-Используйте меню, чтобы выбрать действие.
+Используйте меню, чтобы выбрать другое действие.
 """
 
 FEEDBACK_MODE_TEXT = """
@@ -539,74 +542,108 @@ async def handle_message(event):
 
         # Если в режиме поиска
         if state == UserState.AWAITING_TERM:
-            # Ищем в словаре
+            # Проверяем, не хочет ли пользователь выйти
+            if text.lower() in ['выйти', 'выход', '❌ выйти из режима', 'exit']:
+                clear_state(user_id)
+                main_menu = create_main_menu()
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=EXIT_SEARCH_TEXT,
+                    attachments=[main_menu]
+                )
+                return
+            
+            # Ищем в словаре с исправлением опечаток
             result = dictionary.search(text, FUZZY_THRESHOLD, MAX_SUGGESTIONS)
 
             if result['found']:
                 # Формируем информационный блок
                 info_lines = []
+                
+                # Добавляем сообщение об исправлении, если есть
+                if result.get('correction_message'):
+                    # Убираем звездочки из сообщения об исправлении
+                    clean_message = result['correction_message'].replace('*', '')
+                    info_lines.append(f"🔍 {clean_message}")
 
-                # Синоним
-                if result.get('synonym') and result['synonym'] and result['synonym'] != 'nan':
-                    info_lines.append(f"📝 *Синоним:* {result['synonym']}")
+                # Синоним (без звездочек)
+                if result.get('synonym') and result['synonym'] and result['synonym'] != 'nan' and result['synonym'] != '':
+                    info_lines.append(f"📝 Синоним: {result['synonym']}")
 
-                # Происхождение
-                if result.get('origin') and result['origin'] and result['origin'] != 'nan':
-                    info_lines.append(f"📚 *Происхождение:* {result['origin']}")
+                # Происхождение (без звездочек)
+                if result.get('origin') and result['origin'] and result['origin'] != 'nan' and result['origin'] != '':
+                    info_lines.append(f"📚 Происхождение: {result['origin']}")
 
-                # Формула
-                if result.get('formula') and result['formula'] and result['formula'] != 'nan':
-                    info_lines.append(f"🧪 *Формула:* {result['formula']}")
+                # Формула (без звездочек)
+                if result.get('formula') and result['formula'] and result['formula'] != 'nan' and result['formula'] != '':
+                    info_lines.append(f"🧪 Формула: {result['formula']}")
 
-                # Описание
-                if result.get('definition') and result['definition'] and result['definition'] != 'nan':
-                    info_lines.append(f"📖 *Описание:* {result['definition']}")
+                # Описание (без звездочек)
+                if result.get('definition') and result['definition'] and result['definition'] != 'nan' and result['definition'] != '':
+                    info_lines.append(f"📖 Описание: {result['definition']}")
 
-                # Классификация
-                if result.get('classification') and result['classification'] and result['classification'] != 'nan':
-                    info_lines.append(f"🏷️ *Классификация:* {result['classification']}")
+                # КЛАССИФИКАЦИЮ НЕ ВЫВОДИМ - закомментировано
+                # if result.get('classification') and result['classification'] and result['classification'] != 'nan' and result['classification'] != '':
+                #     info_lines.append(f"🏷️ Классификация: {result['classification']}")
 
                 info_block = '\n'.join(info_lines) if info_lines else "Информация отсутствует"
 
+                # Заголовок с термином (жирным, но без звездочек в тексте)
+                term_display = result['term'].upper()
+                
+                # Формируем красивый ответ с эмодзи и форматированием
                 response = f"""
-🔍 *{result['term']}*
+🔍 *{term_display}*
 
 {info_block}
 
 ---
-📚 Краткий геологический словарь для школьников
+📚 *Краткий геологический словарь для школьников*
 Под ред. Г. И. Немкова — М.: Недра, 1989.
+
+💡 Совет: Введите следующий термин
                 """
-                # ИСПРАВЛЕНО: используем универсальную функцию
+                
+                # Отправляем сообщение с клавиатурой выхода
                 await send_message_with_keyboard(
                     chat_id=chat_id,
                     text=response,
-                    keyboard=get_main_keyboard()
+                    keyboard=get_exit_keyboard()
                 )
 
             elif result['suggestions']:
                 suggestions = "\n".join([f"• {term}" for term in result['suggestions']])
+                # Убираем звездочки из сообщения
+                clean_message = result['correction_message'].replace('*', '')
                 response = f"""
-🤔 Термин *"{text}"* не найден.
+{clean_message}
 
-Возможно, вы имели в виду:
 {suggestions}
+
+💡 Совет: Попробуйте один из предложенных вариантов
                 """
-                # ИСПРАВЛЕНО: используем универсальную функцию
+                
                 await send_message_with_keyboard(
                     chat_id=chat_id,
                     text=response,
-                    keyboard=get_main_keyboard()
+                    keyboard=get_exit_keyboard()
                 )
 
             else:
-                # ИСПРАВЛЕНО: используем универсальную функцию
+                # Убираем звездочки из сообщения
+                clean_message = result['correction_message'].replace('*', '')
+                response = f"""
+{clean_message}
+
+💡 Совет: Проверьте написание
+                """
+                
                 await send_message_with_keyboard(
                     chat_id=chat_id,
-                    text=f"❌ Термин *{text}* не найден в словаре.",
-                    keyboard=get_main_keyboard()
+                    text=response,
+                    keyboard=get_exit_keyboard()
                 )
-            clear_state(user_id)
+            
             return
 
         # Если в режиме обратной связи
@@ -614,12 +651,12 @@ async def handle_message(event):
             user_name = first_name
             feedback_id = add_feedback(user_id, user_name, text)
 
-            # ИСПРАВЛЕНО: используем универсальную функцию
             await send_message_with_keyboard(
                 chat_id=chat_id,
                 text=f"✅ Спасибо! Сообщение #{feedback_id} отправлено разработчикам.",
                 keyboard=get_main_keyboard()
             )
+            clear_state(user_id)
 
             # Уведомление админу
             if ADMIN_ID != 0:
@@ -627,7 +664,6 @@ async def handle_message(event):
 📬 *Новое сообщение!*
 👤 {user_name} (ID: {user_id})
 💬 {text[:200]}
-🔍 /view {feedback_id}
                 """
                 try:
                     await bot.send_message(chat_id=ADMIN_ID, text=admin_notification)
@@ -667,11 +703,11 @@ async def handle_callback(event):
 
         if payload == "user_search":
             set_state(user_id, UserState.AWAITING_TERM)
-            exit_button = create_exit_button()
-            await bot.send_message(
+            # Отправляем сообщение с клавиатурой выхода
+            await send_message_with_keyboard(
                 chat_id=chat_id,
                 text=SEARCH_MODE_TEXT,
-                attachments=[exit_button]
+                keyboard=get_exit_keyboard()
             )
 
         elif payload == "user_feedback":
@@ -767,7 +803,6 @@ async def handle_callback(event):
                 response += f"📅 {msg['created_at']}\n\n"
 
             response += f"Всего: {len(feedback)}, непрочитано: {stats['unread']}\n"
-            response += "Для просмотра: /view [id]"
 
             back_button = create_back_button()
             await bot.send_message(
